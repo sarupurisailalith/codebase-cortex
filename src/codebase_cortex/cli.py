@@ -154,7 +154,7 @@ def _install_git_hook(git_dir: Path, mode: str) -> None:
     hook_script = f"""{CORTEX_HOOK_MARKER}
 # Runs Cortex in the background after each commit
 if command -v cortex >/dev/null 2>&1; then
-    cortex run --once{dry_run_flag} >> .cortex/hook.log 2>&1 &
+    cortex run --once --verbose{dry_run_flag} >> .cortex/hook.log 2>&1 &
 fi
 """
 
@@ -256,12 +256,15 @@ async def _bootstrap_pages(repo_path: Path) -> list[dict]:
 @click.option("--watch", is_flag=True, help="Watch for changes and run continuously.")
 @click.option("--dry-run", is_flag=True, help="Analyze without writing to Notion.")
 @click.option("--full", is_flag=True, help="Analyze entire codebase (not just recent diff).")
-def run(once: bool, watch: bool, dry_run: bool, full: bool) -> None:
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging (LLM calls, MCP calls).")
+def run(once: bool, watch: bool, dry_run: bool, full: bool, verbose: bool) -> None:
     """Run the Cortex pipeline on the current repo."""
     from codebase_cortex.graph import compile_graph
     from codebase_cortex.notion.page_cache import PageCache
-    from codebase_cortex.utils.logging import get_logger
+    from codebase_cortex.utils.logging import setup_logging, get_logger
 
+    if verbose:
+        setup_logging(verbose=True)
     logger = get_logger()
     settings = Settings.from_env()
 

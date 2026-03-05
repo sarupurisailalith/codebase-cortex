@@ -138,8 +138,7 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ]
-            response = await self.llm.ainvoke(messages)
-            raw = response.content
+            raw = await self._invoke_llm(messages)
 
             updates_data = parse_json_array(raw)
 

@@ -77,8 +77,7 @@ class CodeAnalyzerAgent(BaseAgent):
                 SystemMessage(content=DIFF_SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ]
-            response = await self.llm.ainvoke(messages)
-            analysis = response.content
+            analysis = await self._invoke_llm(messages)
         except Exception as e:
             return {
                 "diff_text": diff_text,
@@ -111,8 +110,7 @@ class CodeAnalyzerAgent(BaseAgent):
                 SystemMessage(content=FULL_SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ]
-            response = await self.llm.ainvoke(messages)
-            analysis = response.content
+            analysis = await self._invoke_llm(messages)
         except Exception as e:
             return {
                 "errors": self._append_error(state, f"LLM analysis failed: {e}"),

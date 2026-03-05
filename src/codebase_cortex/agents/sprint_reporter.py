@@ -62,8 +62,7 @@ Write a complete sprint report in markdown."""
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ]
-            response = await self.llm.ainvoke(messages)
-            sprint_summary = response.content
+            sprint_summary = await self._invoke_llm(messages)
         except Exception as e:
             return {
                 "sprint_summary": "",

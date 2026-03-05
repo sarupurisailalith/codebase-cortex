@@ -54,8 +54,7 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ]
-            response = await self.llm.ainvoke(messages)
-            raw = response.content
+            raw = await self._invoke_llm(messages)
 
             tasks_data = parse_json_array(raw)
 
