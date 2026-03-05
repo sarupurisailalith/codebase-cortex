@@ -8,6 +8,7 @@ from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.config import Settings
 from codebase_cortex.notion.page_cache import PageCache
 from codebase_cortex.state import CortexState, DocUpdate
+from codebase_cortex.utils.json_parsing import parse_json_array
 
 SYSTEM_PROMPT = """You are a technical documentation writer. Given a code analysis
 and related existing documentation, generate clear, well-structured documentation
@@ -74,15 +75,7 @@ Only include pages that genuinely need updating based on the changes. Respond wi
             response = await self.llm.ainvoke(messages)
             raw = response.content
 
-            # Parse JSON from LLM response
-            import json
-            # Extract JSON array from response (handle markdown code blocks)
-            json_str = raw
-            if "```" in raw:
-                json_str = raw.split("```")[1]
-                if json_str.startswith("json"):
-                    json_str = json_str[4:]
-            updates_data = json.loads(json_str.strip())
+            updates_data = parse_json_array(raw)
 
         except Exception as e:
             return {
@@ -136,22 +129,27 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                     await rate_limiter.acquire()
 
                     if update["page_id"] and update["action"] == "update":
-                        # Update existing page
+                        # Update existing page content
                         await session.call_tool(
-                            "notion_update_page",
+                            "notion-update-page",
                             arguments={
                                 "page_id": update["page_id"],
-                                "content": update["content"],
+                                "command": "replace_content",
+                                "new_str": update["content"],
                             },
                         )
                         logger.info(f"Updated: {update['title']}")
                     else:
                         # Create new page
                         result = await session.call_tool(
-                            "notion_create_page",
+                            "notion-create-pages",
                             arguments={
-                                "title": update["title"],
-                                "content": update["content"],
+                                "pages": [
+                                    {
+                                        "properties": {"title": update["title"]},
+                                        "content": update["content"],
+                                    }
+                                ],
                             },
                         )
                         page_id = getattr(result, "text", str(result))

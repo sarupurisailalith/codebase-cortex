@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
-
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.state import CortexState, TaskItem
+from codebase_cortex.utils.json_parsing import parse_json_array
 
 SYSTEM_PROMPT = """You are a documentation quality analyst. Given a code analysis,
 identify areas that need documentation but don't have it yet.
@@ -57,13 +56,7 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
             response = await self.llm.ainvoke(messages)
             raw = response.content
 
-            # Parse JSON
-            json_str = raw
-            if "```" in raw:
-                json_str = raw.split("```")[1]
-                if json_str.startswith("json"):
-                    json_str = json_str[4:]
-            tasks_data = json.loads(json_str.strip())
+            tasks_data = parse_json_array(raw)
 
         except Exception as e:
             return {
@@ -104,16 +97,23 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
                         task["priority"], "⚪"
                     )
 
+                    title = f"{priority_icon} {task['title']}"
+                    content = (
+                        f"## {task['title']}\n\n"
+                        f"**Priority:** {task['priority']}\n\n"
+                        f"{task['description']}\n\n"
+                        f"---\n*Auto-created by Codebase Cortex*"
+                    )
+
                     await session.call_tool(
-                        "notion_create_page",
+                        "notion-create-pages",
                         arguments={
-                            "title": f"{priority_icon} {task['title']}",
-                            "content": (
-                                f"## {task['title']}\n\n"
-                                f"**Priority:** {task['priority']}\n\n"
-                                f"{task['description']}\n\n"
-                                f"---\n*Auto-created by Codebase Cortex*"
-                            ),
+                            "pages": [
+                                {
+                                    "properties": {"title": title},
+                                    "content": content,
+                                }
+                            ],
                         },
                     )
                     logger.info(f"Created task: {priority_icon} {task['title']}")

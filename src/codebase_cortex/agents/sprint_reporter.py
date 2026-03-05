@@ -99,19 +99,24 @@ Write a complete sprint report in markdown."""
 
                 if sprint_page:
                     await session.call_tool(
-                        "notion_update_page",
+                        "notion-update-page",
                         arguments={
                             "page_id": sprint_page.page_id,
-                            "content": content,
+                            "command": "replace_content",
+                            "new_str": content,
                         },
                     )
                     logger.info(f"Updated Sprint Log for week of {week_label}")
                 else:
                     await session.call_tool(
-                        "notion_create_page",
+                        "notion-create-pages",
                         arguments={
-                            "title": f"Sprint Report — {week_label}",
-                            "content": content,
+                            "pages": [
+                                {
+                                    "properties": {"title": f"Sprint Report — {week_label}"},
+                                    "content": content,
+                                }
+                            ],
                         },
                     )
                     logger.info(f"Created Sprint Report for week of {week_label}")

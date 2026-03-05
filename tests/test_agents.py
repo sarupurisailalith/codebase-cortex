@@ -156,3 +156,44 @@ async def test_sprint_reporter_no_analysis():
     agent = SprintReporterAgent(_make_mock_llm(""))
     result = await agent.run({"analysis": "", "errors": []})
     assert result["sprint_summary"] == ""
+
+
+# --- JSON parsing tests ---
+
+
+def test_parse_json_array_raw():
+    from codebase_cortex.utils.json_parsing import parse_json_array
+
+    result = parse_json_array('[{"title": "test"}]')
+    assert result == [{"title": "test"}]
+
+
+def test_parse_json_array_code_block():
+    from codebase_cortex.utils.json_parsing import parse_json_array
+
+    raw = '```json\n[{"title": "test"}]\n```'
+    result = parse_json_array(raw)
+    assert result == [{"title": "test"}]
+
+
+def test_parse_json_array_with_surrounding_text():
+    from codebase_cortex.utils.json_parsing import parse_json_array
+
+    raw = 'Here are the updates:\n[{"title": "test"}]\nDone.'
+    result = parse_json_array(raw)
+    assert result == [{"title": "test"}]
+
+
+def test_parse_json_array_trailing_comma():
+    from codebase_cortex.utils.json_parsing import parse_json_array
+
+    raw = '[{"title": "test"},]'
+    result = parse_json_array(raw)
+    assert result == [{"title": "test"}]
+
+
+def test_parse_json_array_invalid():
+    from codebase_cortex.utils.json_parsing import parse_json_array
+
+    with pytest.raises(ValueError):
+        parse_json_array("not json at all")
