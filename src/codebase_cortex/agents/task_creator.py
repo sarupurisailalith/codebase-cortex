@@ -136,5 +136,43 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
 
                     logger.info(f"Created task: {priority_icon} {task['title']}")
 
+                # Append a summary list to the Task Board page itself
+                if task_board:
+                    await rate_limiter.acquire()
+                    from datetime import datetime
+
+                    date_label = datetime.now().strftime("%Y-%m-%d")
+                    summary_lines = [f"\n\n---\n\n### Tasks — {date_label}\n"]
+                    for task in tasks:
+                        icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
+                            task["priority"], "⚪"
+                        )
+                        summary_lines.append(f"- {icon} **{task['title']}** — {task['description'][:80]}")
+
+                    try:
+                        await session.call_tool(
+                            "notion-update-page",
+                            arguments={
+                                "page_id": task_board.page_id,
+                                "command": "insert_content_after",
+                                "selection_with_ellipsis": "---\n*Auto-gen...by Codebase Cortex*",
+                                "new_str": "\n".join(summary_lines),
+                            },
+                        )
+                    except Exception:
+                        # Fallback: try appending without selection match
+                        try:
+                            await session.call_tool(
+                                "notion-update-page",
+                                arguments={
+                                    "page_id": task_board.page_id,
+                                    "command": "insert_content_after",
+                                    "selection_with_ellipsis": "...",
+                                    "new_str": "\n".join(summary_lines),
+                                },
+                            )
+                        except Exception as append_err:
+                            logger.warning(f"Could not append task summary to Task Board: {append_err}")
+
         except Exception as e:
             logger.error(f"Failed to create tasks in Notion: {e}")
