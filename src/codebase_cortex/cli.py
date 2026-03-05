@@ -96,7 +96,20 @@ def init() -> None:
 
     console.print(f"[green]Created {cortex_dir}/ with config[/green]")
 
-    # Step 4: OAuth with Notion
+    # Step 4: Git hook
+    git_dir = cwd / ".git"
+    if git_dir.is_dir():
+        if click.confirm("Auto-run Cortex after each git commit?", default=True):
+            mode = click.prompt(
+                "Hook mode",
+                type=click.Choice(["full", "dry-run"]),
+                default="full",
+            )
+            _install_git_hook(git_dir, mode)
+    else:
+        console.print("[yellow]Not a git repo — skipping git hook setup.[/yellow]")
+
+    # Step 5: OAuth with Notion
     console.print("\n[bold]Connecting to Notion...[/bold]")
     console.print("A browser window will open for Notion authorization.")
 
@@ -110,6 +123,39 @@ def init() -> None:
     console.print("\n[bold]Setup complete![/bold]")
     console.print("Run [cyan]cortex status[/cyan] to verify the connection.")
     console.print("Run [cyan]cortex run --once[/cyan] to analyze your repo.")
+
+
+CORTEX_HOOK_MARKER = "# --- codebase-cortex post-commit hook ---"
+
+
+def _install_git_hook(git_dir: Path, mode: str) -> None:
+    """Install a post-commit git hook that runs Cortex automatically."""
+    hooks_dir = git_dir / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+    hook_path = hooks_dir / "post-commit"
+
+    dry_run_flag = " --dry-run" if mode == "dry-run" else ""
+    hook_script = f"""{CORTEX_HOOK_MARKER}
+# Runs Cortex in the background after each commit
+if command -v cortex >/dev/null 2>&1; then
+    cortex run --once{dry_run_flag} >> .cortex/hook.log 2>&1 &
+fi
+"""
+
+    if hook_path.exists():
+        existing = hook_path.read_text()
+        if CORTEX_HOOK_MARKER in existing:
+            console.print("[yellow]Git hook already installed — skipping.[/yellow]")
+            return
+        # Append to existing hook
+        with open(hook_path, "a") as f:
+            f.write("\n" + hook_script)
+    else:
+        hook_path.write_text("#!/bin/sh\n" + hook_script)
+
+    hook_path.chmod(0o755)
+    mode_label = "dry-run" if mode == "dry-run" else "full"
+    console.print(f"[green]Installed post-commit hook ({mode_label} mode)[/green]")
 
 
 async def _run_oauth(repo_path: Path) -> None:
