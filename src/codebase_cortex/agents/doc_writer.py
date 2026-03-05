@@ -17,8 +17,15 @@ updates for a Notion workspace.
 
 Output a JSON array of documentation updates, each with:
 - "title": Page title (match existing page titles when updating)
-- "content": Markdown content for the page
+- "content": COMPLETE markdown content for the page (see rules below)
 - "action": "update" if modifying existing docs, "create" if new topic
+
+CRITICAL RULES FOR UPDATES:
+- When action is "update", you will be given the EXISTING page content.
+- You MUST PRESERVE all existing content and ADD/MERGE the new information into it.
+- Do NOT discard or replace existing sections — integrate new info into the right sections.
+- If a section already covers a topic, update it in place. If it's a new topic, add a new section.
+- The "content" field must contain the FULL merged page content (existing + new).
 
 Focus on:
 - Architecture decisions and component relationships
@@ -44,6 +51,12 @@ class DocWriterAgent(BaseAgent):
         related_docs = state.get("related_docs", [])
         dry_run = state.get("dry_run", False)
 
+        settings = Settings.from_env()
+        cache = PageCache(cache_path=settings.page_cache_path)
+
+        # Step 1: Fetch existing content from Notion pages that might be updated
+        existing_pages = await self._fetch_existing_pages(settings, cache)
+
         # Build context from related docs
         related_context = ""
         if related_docs:
@@ -51,12 +64,22 @@ class DocWriterAgent(BaseAgent):
             for doc in related_docs[:5]:
                 related_context += f"- **{doc['title']}** (similarity: {doc['similarity']:.2f})\n"
 
+        # Build existing page content section for the LLM
+        existing_content_section = ""
+        if existing_pages:
+            existing_content_section = "\n\n## Current Page Contents\n"
+            for title, content in existing_pages.items():
+                # Truncate very long pages to avoid blowing up the prompt
+                truncated = content[:3000] + ("..." if len(content) > 3000 else "")
+                existing_content_section += f"\n### {title}\n```\n{truncated}\n```\n"
+
         # Ask LLM to generate doc updates
         prompt = f"""Based on this code analysis, determine what documentation should be updated or created.
 
 ## Code Analysis
 {analysis}
 {related_context}
+{existing_content_section}
 
 ## Available Pages
 - Architecture Overview
@@ -66,6 +89,8 @@ class DocWriterAgent(BaseAgent):
 - Task Board
 
 Generate documentation updates as a JSON array. Each element should have "title", "content", and "action" fields.
+For "update" actions: MERGE new information into the existing content shown above. Do NOT discard existing content.
+For "create" actions: Write fresh content for new topics not covered by existing pages.
 Only include pages that genuinely need updating based on the changes. Respond with ONLY the JSON array."""
 
         try:
@@ -85,8 +110,6 @@ Only include pages that genuinely need updating based on the changes. Respond wi
             }
 
         doc_updates: list[DocUpdate] = []
-        settings = Settings.from_env()
-        cache = PageCache(cache_path=settings.page_cache_path)
 
         for update in updates_data:
             title = update.get("title", "Untitled")
@@ -109,6 +132,38 @@ Only include pages that genuinely need updating based on the changes. Respond wi
             await self._write_to_notion(doc_updates, cache, state)
 
         return {"doc_updates": doc_updates}
+
+    async def _fetch_existing_pages(
+        self, settings: Settings, cache: PageCache
+    ) -> dict[str, str]:
+        """Fetch current content of key Notion pages so the LLM can merge updates."""
+        from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
+        from codebase_cortex.utils.logging import get_logger
+
+        logger = get_logger()
+        pages_to_fetch = ["Architecture Overview", "API Reference"]
+        existing: dict[str, str] = {}
+
+        try:
+            async with notion_mcp_session(settings) as session:
+                for title in pages_to_fetch:
+                    cached = cache.find_by_title(title)
+                    if not cached:
+                        continue
+                    await rate_limiter.acquire()
+                    try:
+                        result = await session.call_tool(
+                            "notion-fetch",
+                            arguments={"id": cached.page_id},
+                        )
+                        if not result.isError and result.content:
+                            existing[title] = result.content[0].text
+                    except Exception as e:
+                        logger.warning(f"Could not fetch {title}: {e}")
+        except Exception as e:
+            logger.warning(f"Could not fetch existing pages: {e}")
+
+        return existing
 
     async def _write_to_notion(
         self,
