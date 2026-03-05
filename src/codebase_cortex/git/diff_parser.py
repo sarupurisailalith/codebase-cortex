@@ -25,8 +25,8 @@ def get_recent_diff(repo_path: str, commits: int = 1) -> str:
 
     commits_list = list(repo.iter_commits(max_count=commits + 1))
     if len(commits_list) < 2:
-        # Only one commit — diff against empty tree
-        return repo.git.diff("4b825dc642cb6eb9a060e54bf899d15363d7ef21", "HEAD")
+        # Only one commit — show the root commit diff
+        return repo.git.diff_tree("--root", "--patch", "HEAD")
 
     old = commits_list[-1]
     return repo.git.diff(old.hexsha, "HEAD")
