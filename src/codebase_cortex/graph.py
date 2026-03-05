@@ -18,26 +18,38 @@ async def code_analyzer_node(state: CortexState) -> dict:
 
 async def semantic_finder_node(state: CortexState) -> dict:
     """Find semantically related documentation."""
-    # Placeholder — implemented in Week 2
-    return {"related_docs": []}
+    from codebase_cortex.agents.semantic_finder import SemanticFinderAgent
+    from codebase_cortex.config import get_llm
+
+    agent = SemanticFinderAgent(get_llm())
+    return await agent.run(state)
 
 
 async def doc_writer_node(state: CortexState) -> dict:
     """Write or update Notion documentation pages."""
-    # Placeholder — implemented in Week 2
-    return {"doc_updates": []}
+    from codebase_cortex.agents.doc_writer import DocWriterAgent
+    from codebase_cortex.config import get_llm
+
+    agent = DocWriterAgent(get_llm())
+    return await agent.run(state)
 
 
 async def task_creator_node(state: CortexState) -> dict:
     """Create tasks for undocumented areas."""
-    # Placeholder — implemented in Week 2
-    return {"tasks_created": []}
+    from codebase_cortex.agents.task_creator import TaskCreatorAgent
+    from codebase_cortex.config import get_llm
+
+    agent = TaskCreatorAgent(get_llm())
+    return await agent.run(state)
 
 
 async def sprint_reporter_node(state: CortexState) -> dict:
     """Generate sprint summary report."""
-    # Placeholder — implemented in Week 2
-    return {"sprint_summary": ""}
+    from codebase_cortex.agents.sprint_reporter import SprintReporterAgent
+    from codebase_cortex.config import get_llm
+
+    agent = SprintReporterAgent(get_llm())
+    return await agent.run(state)
 
 
 def should_run_docs(state: CortexState) -> str:

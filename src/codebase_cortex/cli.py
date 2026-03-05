@@ -201,6 +201,29 @@ def run(once: bool, watch: bool, dry_run: bool) -> None:
             console.print(Panel(result["analysis"], title="Analysis", border_style="green"))
         else:
             console.print("[yellow]No analysis produced. Check if there are recent changes.[/yellow]")
+            return
+
+        if result.get("related_docs"):
+            docs_text = "\n".join(
+                f"- {d['title']} (similarity: {d['similarity']:.2f})"
+                for d in result["related_docs"][:5]
+            )
+            console.print(Panel(docs_text, title="Related Docs", border_style="cyan"))
+
+        if result.get("doc_updates"):
+            updates_text = "\n".join(
+                f"- {d['title']} ({d['action']})" for d in result["doc_updates"]
+            )
+            console.print(Panel(updates_text, title="Doc Updates", border_style="blue"))
+
+        if result.get("tasks_created"):
+            tasks_text = "\n".join(
+                f"- [{t['priority']}] {t['title']}" for t in result["tasks_created"]
+            )
+            console.print(Panel(tasks_text, title="Tasks Created", border_style="yellow"))
+
+        if result.get("sprint_summary"):
+            console.print(Panel(result["sprint_summary"], title="Sprint Summary", border_style="magenta"))
 
     if once:
         asyncio.run(_run_once())
@@ -292,6 +315,40 @@ def analyze(path: str) -> None:
 
 
 @cli.command()
-def embed() -> None:
-    """Rebuild the embedding index."""
-    console.print("[cyan]Embedding pipeline not yet implemented (Week 2).[/cyan]")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def embed(path: str) -> None:
+    """Rebuild the embedding index for a repository."""
+    from codebase_cortex.embeddings.indexer import EmbeddingIndexer
+    from codebase_cortex.embeddings.store import FAISSStore
+    from codebase_cortex.embeddings.clustering import TopicClusterer
+    from codebase_cortex.config import DATA_DIR
+
+    repo_path = Path(path).resolve()
+    index_dir = DATA_DIR / "faiss_index"
+
+    console.print(f"Indexing [cyan]{repo_path}[/cyan]...")
+
+    indexer = EmbeddingIndexer(repo_path=repo_path)
+    chunks = indexer.collect_chunks()
+    console.print(f"Found [green]{len(chunks)}[/green] code chunks")
+
+    if not chunks:
+        console.print("[yellow]No indexable files found.[/yellow]")
+        return
+
+    console.print("Generating embeddings...")
+    embeddings = indexer.embed_chunks(chunks)
+
+    store = FAISSStore(index_dir=index_dir)
+    store.build(embeddings, chunks)
+    store.save()
+    console.print(f"Saved FAISS index with [green]{store.size}[/green] vectors to {index_dir}")
+
+    # Run clustering
+    console.print("Clustering topics...")
+    clusterer = TopicClusterer()
+    topics = clusterer.cluster(embeddings, chunks)
+    console.print(f"Found [green]{len(topics)}[/green] topic clusters")
+
+    if topics:
+        console.print(Panel(clusterer.to_markdown(topics), title="Knowledge Map", border_style="blue"))
