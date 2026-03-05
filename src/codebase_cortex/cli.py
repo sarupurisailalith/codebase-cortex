@@ -179,9 +179,10 @@ async def _run_oauth(repo_path: Path) -> None:
     metadata = await fetch_oauth_metadata()
     auth_endpoint = metadata.get("authorization_endpoint")
     token_endpoint = metadata.get("token_endpoint")
+    registration_endpoint = metadata.get("registration_endpoint")
 
     # Dynamic client registration
-    client_info = await register_client(redirect_uri)
+    client_info = await register_client(redirect_uri, registration_endpoint=registration_endpoint)
     client_id = client_info["client_id"]
     client_secret = client_info["client_secret"]
 

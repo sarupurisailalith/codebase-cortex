@@ -9,10 +9,12 @@ import webbrowser
 
 import httpx
 
-NOTION_AUTH_URL = "https://api.notion.com/v1/oauth/authorize"
-NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
 NOTION_MCP_METADATA_URL = "https://mcp.notion.com/.well-known/oauth-authorization-server"
-NOTION_CLIENT_REGISTRATION_URL = "https://mcp.notion.com/oauth/register"
+
+# Fallback URLs (prefer metadata-discovered endpoints)
+NOTION_AUTH_URL = "https://mcp.notion.com/authorize"
+NOTION_TOKEN_URL = "https://mcp.notion.com/token"
+NOTION_CLIENT_REGISTRATION_URL = "https://mcp.notion.com/register"
 
 
 def generate_pkce_pair() -> tuple[str, str]:
@@ -35,18 +37,23 @@ async def fetch_oauth_metadata() -> dict:
         return resp.json()
 
 
-async def register_client(redirect_uri: str) -> dict:
+async def register_client(
+    redirect_uri: str,
+    registration_endpoint: str | None = None,
+) -> dict:
     """Dynamically register an OAuth client with Notion MCP.
 
     Args:
         redirect_uri: The callback URI (e.g., http://localhost:9876/callback).
+        registration_endpoint: Override registration endpoint URL.
 
     Returns:
         Client registration response with client_id and client_secret.
     """
+    endpoint = registration_endpoint or NOTION_CLIENT_REGISTRATION_URL
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            NOTION_CLIENT_REGISTRATION_URL,
+            endpoint,
             json={
                 "client_name": "Codebase Cortex",
                 "redirect_uris": [redirect_uri],
