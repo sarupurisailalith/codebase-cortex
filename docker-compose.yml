@@ -1,0 +1,7 @@
+services:
+  cortex:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    command: ["run", "--once"]

@@ -1,0 +1,42 @@
+[project]
+name = "codebase-cortex"
+version = "0.1.0"
+description = "LangGraph multi-agent system that keeps engineering docs in sync with code via Notion MCP"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "langgraph>=0.3",
+    "langchain-core>=0.3",
+    "langchain-mcp-adapters>=0.1",
+    "langchain-anthropic>=0.3",
+    "langchain-google-genai>=2.1",
+    "mcp>=1.0",
+    "httpx>=0.27",
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
+    "hdbscan>=0.8",
+    "PyGithub>=2.0",
+    "gitpython>=3.1",
+    "click>=8.0",
+    "rich>=13.0",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+cortex = "codebase_cortex.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codebase_cortex"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
