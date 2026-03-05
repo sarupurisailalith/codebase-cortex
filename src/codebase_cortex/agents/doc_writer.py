@@ -8,7 +8,7 @@ import re
 
 from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.config import Settings
-from codebase_cortex.notion.bootstrap import extract_page_id, search_page_by_title
+from codebase_cortex.notion.bootstrap import extract_page_id
 from codebase_cortex.notion.page_cache import PageCache
 from codebase_cortex.state import CortexState, DocUpdate
 from codebase_cortex.utils.json_parsing import parse_json_array
@@ -255,14 +255,9 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                     await rate_limiter.acquire()
 
                     page_id = update["page_id"]
-
-                    # If no cached page_id, search Notion before creating
-                    if not page_id:
-                        page_id = await search_page_by_title(
-                            session, update["title"]
-                        )
-                        if page_id:
-                            cache.upsert(page_id, update["title"])
+                    # Only update pages we already track in the cache.
+                    # Never search the whole workspace — that risks
+                    # overwriting unrelated user pages.
 
                     if page_id:
                         # Content already has old+new merged by LLM
