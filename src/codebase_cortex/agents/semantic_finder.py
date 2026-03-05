@@ -28,22 +28,16 @@ class SemanticFinderAgent(BaseAgent):
         index_dir = settings.faiss_index_dir
 
         try:
-            store = FAISSStore(index_dir=index_dir)
-            loaded = store.load()
-
-            if not loaded:
-                # No existing index — build one on the fly
-                indexer = EmbeddingIndexer(repo_path=repo_path)
-                chunks = indexer.collect_chunks()
-                if not chunks:
-                    return {"related_docs": []}
-
-                embeddings = indexer.embed_chunks(chunks)
-                store.build(embeddings, chunks)
-                store.save()
-
-            # Embed the analysis text as query
+            # Always rebuild the index to capture new/changed files
             indexer = EmbeddingIndexer(repo_path=repo_path)
+            chunks = indexer.collect_chunks()
+            if not chunks:
+                return {"related_docs": []}
+
+            store = FAISSStore(index_dir=index_dir)
+            embeddings = indexer.embed_chunks(chunks)
+            store.build(embeddings, chunks)
+            store.save()
             query_emb = indexer.embed_texts([analysis])
             if query_emb.size == 0:
                 return {"related_docs": []}

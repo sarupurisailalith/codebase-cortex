@@ -81,7 +81,7 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
         return {"tasks_created": tasks}
 
     async def _create_in_notion(self, tasks: list[TaskItem], state: CortexState) -> None:
-        """Create task items in Notion via MCP."""
+        """Create task items as child pages under the Task Board in Notion."""
         from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
         from codebase_cortex.config import Settings
         from codebase_cortex.notion.page_cache import PageCache
@@ -91,9 +91,8 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
         settings = Settings.from_env()
         cache = PageCache(cache_path=settings.page_cache_path)
 
-        # Find parent page and task board for organization
-        parent_page = cache.find_by_title("Codebase Cortex")
         task_board = cache.find_by_title("Task Board")
+        parent_page = cache.find_by_title("Codebase Cortex")
         parent_id = (task_board or parent_page)
         parent_id = parent_id.page_id if parent_id else None
 
@@ -135,44 +134,6 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
                         cache.upsert(page_id, task["title"])
 
                     logger.info(f"Created task: {priority_icon} {task['title']}")
-
-                # Append a summary list to the Task Board page itself
-                if task_board:
-                    await rate_limiter.acquire()
-                    from datetime import datetime
-
-                    date_label = datetime.now().strftime("%Y-%m-%d")
-                    summary_lines = [f"\n\n---\n\n### Tasks — {date_label}\n"]
-                    for task in tasks:
-                        icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
-                            task["priority"], "⚪"
-                        )
-                        summary_lines.append(f"- {icon} **{task['title']}** — {task['description'][:80]}")
-
-                    try:
-                        await session.call_tool(
-                            "notion-update-page",
-                            arguments={
-                                "page_id": task_board.page_id,
-                                "command": "insert_content_after",
-                                "selection_with_ellipsis": "---\n*Auto-gen...by Codebase Cortex*",
-                                "new_str": "\n".join(summary_lines),
-                            },
-                        )
-                    except Exception:
-                        # Fallback: try appending without selection match
-                        try:
-                            await session.call_tool(
-                                "notion-update-page",
-                                arguments={
-                                    "page_id": task_board.page_id,
-                                    "command": "insert_content_after",
-                                    "selection_with_ellipsis": "...",
-                                    "new_str": "\n".join(summary_lines),
-                                },
-                            )
-                        except Exception as append_err:
-                            logger.warning(f"Could not append task summary to Task Board: {append_err}")
 
         except Exception as e:
             logger.error(f"Failed to create tasks in Notion: {e}")
