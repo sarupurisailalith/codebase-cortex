@@ -4,12 +4,51 @@ from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+import re
+
 from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.config import Settings
 from codebase_cortex.notion.bootstrap import extract_page_id, search_page_by_title
 from codebase_cortex.notion.page_cache import PageCache
 from codebase_cortex.state import CortexState, DocUpdate
 from codebase_cortex.utils.json_parsing import parse_json_array
+
+
+def strip_notion_metadata(raw_text: str) -> str:
+    """Extract just the page content from a notion-fetch response.
+
+    The notion-fetch tool returns XML-like wrapper with metadata:
+        Here is the result of "view" for the Page ...
+        <page url="...">
+        <ancestor-path>...</ancestor-path>
+        <properties>...</properties>
+        <content>
+        ... actual markdown content ...
+        </content>
+        </page>
+
+    This function extracts only the content between <content> tags,
+    or falls back to stripping all XML-like tags.
+    """
+    # Try to extract content between <content> and </content>
+    content_match = re.search(
+        r"<content>\s*(.*?)\s*</content>",
+        raw_text,
+        re.DOTALL,
+    )
+    if content_match:
+        return content_match.group(1).strip()
+
+    # Fallback: strip the "Here is the result..." header and XML tags
+    # Remove the leading metadata line
+    text = re.sub(r'^Here is the result of "view".*?\n', "", raw_text)
+    # Remove XML-like tags
+    text = re.sub(r"</?(?:page|ancestor-path|parent-page|properties|content)[^>]*>", "", text)
+    # Remove JSON property lines like {"title":"..."}
+    text = re.sub(r'^\s*\{.*?"title".*?\}\s*$', "", text, flags=re.MULTILINE)
+    # Clean up excessive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 SYSTEM_PROMPT = """You are a technical documentation writer. Given a code analysis
 and related existing documentation, generate clear, well-structured documentation
@@ -157,7 +196,7 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                             arguments={"id": cached.page_id},
                         )
                         if not result.isError and result.content:
-                            existing[title] = result.content[0].text
+                            existing[title] = strip_notion_metadata(result.content[0].text)
                     except Exception as e:
                         logger.warning(f"Could not fetch {title}: {e}")
         except Exception as e:
@@ -199,20 +238,7 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                             cache.upsert(page_id, update["title"])
 
                     if page_id:
-                        # Fetch current content first, then update
-                        await rate_limiter.acquire()
-                        try:
-                            existing = await session.call_tool(
-                                "notion-fetch",
-                                arguments={"id": page_id},
-                            )
-                            # Only update if content actually changed
-                            existing_text = ""
-                            if not existing.isError and existing.content:
-                                existing_text = existing.content[0].text
-                        except Exception:
-                            existing_text = ""
-
+                        # Content already has old+new merged by LLM
                         await session.call_tool(
                             "notion-update-page",
                             arguments={
