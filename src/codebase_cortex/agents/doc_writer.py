@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.config import Settings
+from codebase_cortex.notion.bootstrap import extract_page_id, search_page_by_title
 from codebase_cortex.notion.page_cache import PageCache
 from codebase_cortex.state import CortexState, DocUpdate
 from codebase_cortex.utils.json_parsing import parse_json_array
@@ -123,37 +124,70 @@ Only include pages that genuinely need updating based on the changes. Respond wi
         logger = get_logger()
         settings = Settings.from_env()
 
+        # Get parent page for new pages
+        parent_page = cache.find_by_title("Codebase Cortex")
+        parent_id = parent_page.page_id if parent_page else None
+
         try:
             async with notion_mcp_session(settings) as session:
                 for update in updates:
                     await rate_limiter.acquire()
 
-                    if update["page_id"] and update["action"] == "update":
-                        # Update existing page content
+                    page_id = update["page_id"]
+
+                    # If no cached page_id, search Notion before creating
+                    if not page_id:
+                        page_id = await search_page_by_title(
+                            session, update["title"]
+                        )
+                        if page_id:
+                            cache.upsert(page_id, update["title"])
+
+                    if page_id:
+                        # Fetch current content first, then update
+                        await rate_limiter.acquire()
+                        try:
+                            existing = await session.call_tool(
+                                "notion-fetch",
+                                arguments={"id": page_id},
+                            )
+                            # Only update if content actually changed
+                            existing_text = ""
+                            if not existing.isError and existing.content:
+                                existing_text = existing.content[0].text
+                        except Exception:
+                            existing_text = ""
+
                         await session.call_tool(
                             "notion-update-page",
                             arguments={
-                                "page_id": update["page_id"],
+                                "page_id": page_id,
                                 "command": "replace_content",
                                 "new_str": update["content"],
                             },
                         )
+                        cache.upsert(page_id, update["title"])
                         logger.info(f"Updated: {update['title']}")
                     else:
-                        # Create new page
+                        # Create new page under parent
+                        create_args: dict = {
+                            "pages": [
+                                {
+                                    "properties": {"title": update["title"]},
+                                    "content": update["content"],
+                                }
+                            ],
+                        }
+                        if parent_id:
+                            create_args["parent"] = {"page_id": parent_id}
+
                         result = await session.call_tool(
                             "notion-create-pages",
-                            arguments={
-                                "pages": [
-                                    {
-                                        "properties": {"title": update["title"]},
-                                        "content": update["content"],
-                                    }
-                                ],
-                            },
+                            arguments=create_args,
                         )
-                        page_id = getattr(result, "text", str(result))
-                        cache.upsert(page_id, update["title"])
+                        new_page_id = extract_page_id(result)
+                        if new_page_id:
+                            cache.upsert(new_page_id, update["title"])
                         logger.info(f"Created: {update['title']}")
 
         except Exception as e:

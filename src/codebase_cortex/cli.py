@@ -113,12 +113,28 @@ def init() -> None:
     console.print("\n[bold]Connecting to Notion...[/bold]")
     console.print("A browser window will open for Notion authorization.")
 
+    notion_connected = False
     try:
         asyncio.run(_run_oauth(cwd))
         console.print("[green]Notion connected successfully![/green]")
+        notion_connected = True
     except Exception as e:
         console.print(f"[yellow]Notion OAuth skipped: {e}[/yellow]")
         console.print("You can retry later with: cortex init")
+
+    # Step 6: Bootstrap Notion pages
+    if notion_connected:
+        console.print("\n[bold]Setting up Notion workspace...[/bold]")
+        try:
+            pages = asyncio.run(_bootstrap_pages(cwd))
+            if pages:
+                console.print(f"[green]Created {len(pages)} pages in Notion[/green]")
+                for p in pages:
+                    console.print(f"  - {p['title']}")
+            else:
+                console.print("[yellow]No pages created (may already exist)[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]Page bootstrap skipped: {e}[/yellow]")
 
     console.print("\n[bold]Setup complete![/bold]")
     console.print("Run [cyan]cortex status[/cyan] to verify the connection.")
@@ -225,6 +241,14 @@ async def _run_oauth(repo_path: Path) -> None:
         token_endpoint=token_endpoint,
     )
     save_tokens(token_data, settings.notion_token_path)
+
+
+async def _bootstrap_pages(repo_path: Path) -> list[dict]:
+    """Create starter Notion pages for the repo."""
+    from codebase_cortex.notion.bootstrap import bootstrap_notion_pages
+
+    settings = Settings.from_env(repo_path)
+    return await bootstrap_notion_pages(settings)
 
 
 @cli.command()
@@ -418,3 +442,122 @@ def embed() -> None:
 
     if topics:
         console.print(Panel(clusterer.to_markdown(topics), title="Knowledge Map", border_style="blue"))
+
+
+@cli.command()
+@click.option("--query", default="", help="Search query to filter pages (default: scan all).")
+@click.option("--link", multiple=True, help="Manually link a Notion page URL or ID to track.")
+def scan(query: str, link: tuple[str, ...]) -> None:
+    """Scan Notion workspace and link existing pages to Cortex.
+
+    Use this when you have pre-existing documentation in Notion
+    that you want Cortex to know about and update.
+
+    Examples:
+        cortex scan                         # Discover all pages
+        cortex scan --query "API docs"      # Search for specific pages
+        cortex scan --link <page-id>        # Link a specific page by ID
+    """
+    settings = Settings.from_env()
+
+    if not settings.is_initialized:
+        console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
+        return
+
+    if link:
+        asyncio.run(_link_pages(settings, list(link)))
+    else:
+        asyncio.run(_scan_workspace(settings, query))
+
+
+async def _scan_workspace(settings: Settings, query: str) -> None:
+    """Scan Notion workspace for existing pages and add them to cache."""
+    from codebase_cortex.mcp_client import notion_mcp_session
+    from codebase_cortex.notion.page_cache import PageCache
+    from codebase_cortex.notion.bootstrap import extract_page_id
+    import re
+
+    cache = PageCache(cache_path=settings.page_cache_path)
+    search_query = query or settings.repo_path.name
+
+    console.print(f"Searching Notion for: [cyan]{search_query}[/cyan]")
+
+    async with notion_mcp_session(settings) as session:
+        result = await session.call_tool(
+            "notion-search",
+            arguments={"query": search_query},
+        )
+
+        if result.isError or not result.content:
+            console.print("[yellow]No results found.[/yellow]")
+            return
+
+        response_text = result.content[0].text
+        console.print(Panel(response_text[:2000], title="Search Results", border_style="cyan"))
+
+        # Parse page IDs and titles from search results
+        # Notion search returns markdown with page references
+        uuid_pattern = r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}"
+        found_ids = re.findall(uuid_pattern, response_text, re.IGNORECASE)
+
+        if not found_ids:
+            console.print("[yellow]No page IDs found in results.[/yellow]")
+            return
+
+        console.print(f"\nFound [green]{len(found_ids)}[/green] pages. Fetching details...")
+
+        for page_id in found_ids[:20]:  # Limit to 20 pages
+            try:
+                fetch_result = await session.call_tool(
+                    "notion-fetch",
+                    arguments={"id": page_id},
+                )
+                if not fetch_result.isError and fetch_result.content:
+                    page_text = fetch_result.content[0].text
+                    # Extract title from first heading or first line
+                    lines = page_text.strip().split("\n")
+                    title = lines[0].lstrip("# ").strip() if lines else "Untitled"
+                    # Clean up title
+                    title = title.replace("**", "").strip()
+                    if title:
+                        cache.upsert(page_id, title)
+                        console.print(f"  [green]Linked:[/green] {title} ({page_id[:8]}...)")
+            except Exception as e:
+                console.print(f"  [yellow]Failed to fetch {page_id[:8]}...: {e}[/yellow]")
+
+    total = len(cache.pages)
+    console.print(f"\n[bold]Cache now has {total} pages.[/bold]")
+    console.print("Cortex will update these pages when relevant code changes are detected.")
+
+
+async def _link_pages(settings: Settings, page_ids: list[str]) -> None:
+    """Manually link specific Notion pages by ID."""
+    from codebase_cortex.mcp_client import notion_mcp_session
+    from codebase_cortex.notion.page_cache import PageCache
+
+    cache = PageCache(cache_path=settings.page_cache_path)
+
+    async with notion_mcp_session(settings) as session:
+        for page_id in page_ids:
+            # Clean up the ID (remove URL prefix if pasted)
+            clean_id = page_id.split("/")[-1].split("?")[0].split("-")[-1]
+            if len(clean_id) == 32:
+                # Add dashes to raw 32-char hex
+                clean_id = f"{clean_id[:8]}-{clean_id[8:12]}-{clean_id[12:16]}-{clean_id[16:20]}-{clean_id[20:]}"
+
+            try:
+                result = await session.call_tool(
+                    "notion-fetch",
+                    arguments={"id": clean_id},
+                )
+                if not result.isError and result.content:
+                    page_text = result.content[0].text
+                    lines = page_text.strip().split("\n")
+                    title = lines[0].lstrip("# ").strip() if lines else "Untitled"
+                    title = title.replace("**", "").strip()
+                    cache.upsert(clean_id, title)
+                    console.print(f"[green]Linked:[/green] {title} ({clean_id[:8]}...)")
+                else:
+                    console.print(f"[red]Failed to fetch page {clean_id}[/red]")
+            except Exception as e:
+                console.print(f"[red]Error linking {clean_id}: {e}[/red]")

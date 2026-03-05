@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from codebase_cortex.agents.base import BaseAgent
+from codebase_cortex.notion.bootstrap import extract_page_id
 from codebase_cortex.state import CortexState
 
 SYSTEM_PROMPT = """You are a technical project manager writing a sprint summary.
@@ -89,6 +90,9 @@ Write a complete sprint report in markdown."""
         cache = PageCache(cache_path=settings.page_cache_path)
 
         sprint_page = cache.find_by_title("Sprint Log")
+        parent_page = cache.find_by_title("Codebase Cortex")
+        parent_id = (sprint_page or parent_page)
+        parent_id = parent_id.page_id if parent_id else None
 
         try:
             async with notion_mcp_session(settings) as session:
@@ -98,27 +102,37 @@ Write a complete sprint report in markdown."""
                 content = f"# Sprint Report — Week of {week_label}\n\n{summary}"
 
                 if sprint_page:
+                    # Append to existing Sprint Log using insert_content_after
                     await session.call_tool(
                         "notion-update-page",
                         arguments={
                             "page_id": sprint_page.page_id,
-                            "command": "replace_content",
-                            "new_str": content,
+                            "command": "insert_content_after",
+                            "selection_with_ellipsis": "---\n*Auto-gen...by Codebase Cortex*",
+                            "new_str": f"\n\n---\n\n{content}",
                         },
                     )
-                    logger.info(f"Updated Sprint Log for week of {week_label}")
+                    logger.info(f"Appended to Sprint Log for week of {week_label}")
                 else:
-                    await session.call_tool(
+                    # Create new sprint report page
+                    create_args: dict = {
+                        "pages": [
+                            {
+                                "properties": {"title": f"📋 Sprint Report — {week_label}"},
+                                "content": content,
+                            }
+                        ],
+                    }
+                    if parent_id:
+                        create_args["parent"] = {"page_id": parent_id}
+
+                    result = await session.call_tool(
                         "notion-create-pages",
-                        arguments={
-                            "pages": [
-                                {
-                                    "properties": {"title": f"Sprint Report — {week_label}"},
-                                    "content": content,
-                                }
-                            ],
-                        },
+                        arguments=create_args,
                     )
+                    page_id = extract_page_id(result)
+                    if page_id:
+                        cache.upsert(page_id, "Sprint Log")
                     logger.info(f"Created Sprint Report for week of {week_label}")
 
         except Exception as e:

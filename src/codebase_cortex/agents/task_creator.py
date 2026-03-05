@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from codebase_cortex.agents.base import BaseAgent
+from codebase_cortex.notion.bootstrap import extract_page_id
 from codebase_cortex.state import CortexState, TaskItem
 from codebase_cortex.utils.json_parsing import parse_json_array
 
@@ -83,10 +84,18 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
         """Create task items in Notion via MCP."""
         from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
         from codebase_cortex.config import Settings
+        from codebase_cortex.notion.page_cache import PageCache
         from codebase_cortex.utils.logging import get_logger
 
         logger = get_logger()
         settings = Settings.from_env()
+        cache = PageCache(cache_path=settings.page_cache_path)
+
+        # Find parent page and task board for organization
+        parent_page = cache.find_by_title("Codebase Cortex")
+        task_board = cache.find_by_title("Task Board")
+        parent_id = (task_board or parent_page)
+        parent_id = parent_id.page_id if parent_id else None
 
         try:
             async with notion_mcp_session(settings) as session:
@@ -105,17 +114,26 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
                         f"---\n*Auto-created by Codebase Cortex*"
                     )
 
-                    await session.call_tool(
+                    create_args: dict = {
+                        "pages": [
+                            {
+                                "properties": {"title": title},
+                                "content": content,
+                            }
+                        ],
+                    }
+                    if parent_id:
+                        create_args["parent"] = {"page_id": parent_id}
+
+                    result = await session.call_tool(
                         "notion-create-pages",
-                        arguments={
-                            "pages": [
-                                {
-                                    "properties": {"title": title},
-                                    "content": content,
-                                }
-                            ],
-                        },
+                        arguments=create_args,
                     )
+
+                    page_id = extract_page_id(result)
+                    if page_id:
+                        cache.upsert(page_id, task["title"])
+
                     logger.info(f"Created task: {priority_icon} {task['title']}")
 
         except Exception as e:
