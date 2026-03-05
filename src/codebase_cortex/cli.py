@@ -255,9 +255,11 @@ async def _bootstrap_pages(repo_path: Path) -> list[dict]:
 @click.option("--once", is_flag=True, help="Run once and exit (no watch mode).")
 @click.option("--watch", is_flag=True, help="Watch for changes and run continuously.")
 @click.option("--dry-run", is_flag=True, help="Analyze without writing to Notion.")
-def run(once: bool, watch: bool, dry_run: bool) -> None:
+@click.option("--full", is_flag=True, help="Analyze entire codebase (not just recent diff).")
+def run(once: bool, watch: bool, dry_run: bool, full: bool) -> None:
     """Run the Cortex pipeline on the current repo."""
     from codebase_cortex.graph import compile_graph
+    from codebase_cortex.notion.page_cache import PageCache
     from codebase_cortex.utils.logging import get_logger
 
     logger = get_logger()
@@ -270,15 +272,31 @@ def run(once: bool, watch: bool, dry_run: bool) -> None:
     if not once and not watch:
         once = True  # Default to single run
 
+    # Auto-detect: if doc pages have no real content yet, do a full scan
+    if not full:
+        cache = PageCache(cache_path=settings.page_cache_path)
+        arch_page = cache.find_by_title("Architecture Overview")
+        if arch_page and arch_page.content_hash == "":
+            # Pages exist but were never written with real content
+            # Check if this looks like a first run after init
+            doc_pages = cache.find_all_doc_pages()
+            all_empty = all(p.content_hash == "" for p in doc_pages)
+            if all_empty:
+                console.print("[cyan]First run detected — doing full codebase scan[/cyan]")
+                full = True
+
     graph = compile_graph()
 
     initial_state = {
         "trigger": "manual",
         "repo_path": str(settings.repo_path),
         "dry_run": dry_run,
+        "full_scan": full,
         "errors": [],
     }
 
+    if full:
+        console.print("[cyan]Full codebase analysis mode[/cyan]")
     if dry_run:
         console.print("[yellow]Dry run mode — no Notion writes[/yellow]")
 

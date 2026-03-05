@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+import unicodedata
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -67,8 +69,39 @@ class PageCache:
     def get_stale(self, max_age: float = 3600.0) -> list[CachedPage]:
         return [p for p in self.pages.values() if p.is_stale(max_age)]
 
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        """Strip emojis, special characters, and normalize whitespace for comparison."""
+        # Remove characters in emoji-related Unicode categories (So = Symbol, other)
+        cleaned = "".join(
+            ch for ch in title
+            if unicodedata.category(ch) not in ("So", "Sk", "Sc", "Sm")
+        )
+        # Remove non-alphanumeric characters (keep spaces)
+        cleaned = re.sub(r"[^a-zA-Z0-9\s]", "", cleaned)
+        # Collapse whitespace and strip
+        return re.sub(r"\s+", " ", cleaned).strip().lower()
+
     def find_by_title(self, title: str) -> CachedPage | None:
+        """Find a page by title: exact match first, then fuzzy fallback."""
         for page in self.pages.values():
             if page.title == title:
                 return page
+        return self.find_by_title_fuzzy(title)
+
+    def find_by_title_fuzzy(self, title: str) -> CachedPage | None:
+        """Find the best matching page by normalized title comparison."""
+        normalized = self._normalize_title(title)
+        if not normalized:
+            return None
+        for page in self.pages.values():
+            if self._normalize_title(page.title) == normalized:
+                return page
         return None
+
+    def find_all_doc_pages(self) -> list[CachedPage]:
+        """Return all cached pages except infrastructure pages."""
+        return [
+            p for p in self.pages.values()
+            if p.title != "Codebase Cortex"
+        ]

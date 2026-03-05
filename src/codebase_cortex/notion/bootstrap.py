@@ -118,7 +118,7 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
     pages = []
 
     repo_name = settings.repo_path.name
-    parent_title = f"📁 {PARENT_PAGE_TITLE} — {repo_name}"
+    parent_title = repo_name
 
     async with notion_mcp_session(settings) as session:
         # Step 1: Search for existing parent page
@@ -135,7 +135,7 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
                             {
                                 "properties": {"title": parent_title},
                                 "content": (
-                                    f"# {PARENT_PAGE_TITLE}\n\n"
+                                    f"# {repo_name}\n\n"
                                     f"Auto-generated documentation hub for **{repo_name}**.\n\n"
                                     "Managed by [Codebase Cortex](https://github.com/sarupurisailalith/codebase-cortex)."
                                 ),

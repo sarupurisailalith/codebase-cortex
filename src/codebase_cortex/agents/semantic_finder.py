@@ -51,6 +51,7 @@ class SemanticFinderAgent(BaseAgent):
                     page_id=r.chunk.file_path,
                     title=f"{r.chunk.name} ({r.chunk.file_path})",
                     similarity=r.score,
+                    content=r.chunk.content[:2000],
                 ))
 
             return {"related_docs": related_docs}

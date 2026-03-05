@@ -93,24 +93,29 @@ class DocWriterAgent(BaseAgent):
         settings = Settings.from_env()
         cache = PageCache(cache_path=settings.page_cache_path)
 
-        # Step 1: Fetch existing content from Notion pages that might be updated
+        # Step 1: Fetch existing content from all Notion doc pages
         existing_pages = await self._fetch_existing_pages(settings, cache)
 
-        # Build context from related docs
+        # Build context from related code chunks (actual content, not just titles)
         related_context = ""
         if related_docs:
-            related_context = "\n\n## Related Existing Documentation\n"
+            related_context = "\n\n## Related Code\n"
             for doc in related_docs[:5]:
-                related_context += f"- **{doc['title']}** (similarity: {doc['similarity']:.2f})\n"
+                related_context += f"\n### {doc['title']} (similarity: {doc['similarity']:.2f})\n"
+                if doc.get("content"):
+                    related_context += f"```\n{doc['content'][:1500]}\n```\n"
 
         # Build existing page content section for the LLM
         existing_content_section = ""
         if existing_pages:
             existing_content_section = "\n\n## Current Page Contents\n"
             for title, content in existing_pages.items():
-                # Truncate very long pages to avoid blowing up the prompt
                 truncated = content[:3000] + ("..." if len(content) > 3000 else "")
                 existing_content_section += f"\n### {title}\n```\n{truncated}\n```\n"
+
+        # Build dynamic page list from cache
+        doc_pages = cache.find_all_doc_pages()
+        page_list = "\n".join(f"- {p.title}" for p in doc_pages) if doc_pages else "- (no pages yet)"
 
         # Ask LLM to generate doc updates
         prompt = f"""Based on this code analysis, determine what documentation should be updated or created.
@@ -120,12 +125,8 @@ class DocWriterAgent(BaseAgent):
 {related_context}
 {existing_content_section}
 
-## Available Pages
-- Architecture Overview
-- API Reference
-- Knowledge Map
-- Sprint Log
-- Task Board
+## Available Pages in Notion
+{page_list}
 
 Generate documentation updates as a JSON array. Each element should have "title", "content", and "action" fields.
 For "update" actions: MERGE new information into the existing content shown above. Do NOT discard existing content.
@@ -175,30 +176,56 @@ Only include pages that genuinely need updating based on the changes. Respond wi
     async def _fetch_existing_pages(
         self, settings: Settings, cache: PageCache
     ) -> dict[str, str]:
-        """Fetch current content of key Notion pages so the LLM can merge updates."""
+        """Fetch current content of all doc pages from Notion.
+
+        Also syncs page titles back to cache (detects renames).
+        """
         from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
         from codebase_cortex.utils.logging import get_logger
 
         logger = get_logger()
-        pages_to_fetch = ["Architecture Overview", "API Reference"]
         existing: dict[str, str] = {}
+
+        # Fetch all doc pages (skip infrastructure-only pages)
+        doc_pages = cache.find_all_doc_pages()
+        # Limit to 10 pages to avoid excessive API calls
+        pages_to_fetch = doc_pages[:10]
+
+        if not pages_to_fetch:
+            return existing
 
         try:
             async with notion_mcp_session(settings) as session:
-                for title in pages_to_fetch:
-                    cached = cache.find_by_title(title)
-                    if not cached:
-                        continue
+                for cached_page in pages_to_fetch:
                     await rate_limiter.acquire()
                     try:
                         result = await session.call_tool(
                             "notion-fetch",
-                            arguments={"id": cached.page_id},
+                            arguments={"id": cached_page.page_id},
                         )
                         if not result.isError and result.content:
-                            existing[title] = strip_notion_metadata(result.content[0].text)
+                            raw = result.content[0].text
+                            content = strip_notion_metadata(raw)
+                            existing[cached_page.title] = content
+
+                            # Sync title back from Notion (detect renames)
+                            # Extract actual title from the raw response
+                            title_match = re.search(
+                                r'"title"\s*:\s*"([^"]+)"', raw
+                            )
+                            if title_match:
+                                actual_title = title_match.group(1)
+                                normalized_actual = cache._normalize_title(actual_title)
+                                normalized_cached = cache._normalize_title(cached_page.title)
+                                if normalized_actual != normalized_cached and normalized_actual:
+                                    logger.info(
+                                        f"Page renamed: '{cached_page.title}' → '{actual_title}'"
+                                    )
+                                    cache.upsert(
+                                        cached_page.page_id, actual_title
+                                    )
                     except Exception as e:
-                        logger.warning(f"Could not fetch {title}: {e}")
+                        logger.warning(f"Could not fetch {cached_page.title}: {e}")
         except Exception as e:
             logger.warning(f"Could not fetch existing pages: {e}")
 
@@ -247,7 +274,10 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                                 "new_str": update["content"],
                             },
                         )
-                        cache.upsert(page_id, update["title"])
+                        # Mark as written with a content hash so first-run detection works
+                        import hashlib
+                        content_hash = hashlib.md5(update["content"].encode()).hexdigest()[:8]
+                        cache.upsert(page_id, update["title"], content_hash=content_hash)
                         logger.info(f"Updated: {update['title']}")
                     else:
                         # Create new page under parent
@@ -268,7 +298,9 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                         )
                         new_page_id = extract_page_id(result)
                         if new_page_id:
-                            cache.upsert(new_page_id, update["title"])
+                            import hashlib
+                            content_hash = hashlib.md5(update["content"].encode()).hexdigest()[:8]
+                            cache.upsert(new_page_id, update["title"], content_hash=content_hash)
                         logger.info(f"Created: {update['title']}")
 
         except Exception as e:

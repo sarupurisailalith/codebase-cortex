@@ -32,12 +32,13 @@ class TaskItem(TypedDict):
     priority: str  # "high" | "medium" | "low"
 
 
-class RelatedDoc(TypedDict):
+class RelatedDoc(TypedDict, total=False):
     """A semantically related existing document."""
 
     page_id: str
     title: str
     similarity: float
+    content: str  # Code chunk content for LLM context
 
 
 class CortexState(TypedDict, total=False):
@@ -50,6 +51,7 @@ class CortexState(TypedDict, total=False):
     trigger: str  # "commit" | "pr" | "schedule" | "manual"
     repo_path: str
     dry_run: bool
+    full_scan: bool  # True = analyze entire codebase, not just recent diff
 
     # Git data
     diff_text: str

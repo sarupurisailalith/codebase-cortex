@@ -36,3 +36,19 @@ def test_parse_diff_count(sample_diff: str):
 def test_parse_empty_diff():
     assert parse_diff("") == []
     assert parse_diff("   ") == []
+
+
+def test_full_codebase_summary(tmp_path):
+    """Test get_full_codebase_summary reads files and builds summary."""
+    from codebase_cortex.git.diff_parser import get_full_codebase_summary
+
+    (tmp_path / "app.py").write_text("def hello():\n    return 'world'\n")
+    (tmp_path / "README.md").write_text("# Test\n")
+    (tmp_path / ".git").mkdir()  # Should be skipped
+    (tmp_path / ".git" / "config").write_text("gitconfig")
+
+    summary = get_full_codebase_summary(str(tmp_path))
+    assert "2 files" in summary
+    assert "app.py" in summary
+    assert "README.md" in summary
+    assert ".git" not in summary.split("# Full Codebase Summary")[1]
