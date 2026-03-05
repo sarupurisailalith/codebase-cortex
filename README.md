@@ -5,15 +5,24 @@ LangGraph multi-agent system that keeps engineering documentation in sync with c
 ## Quick Start
 
 ```bash
-# Install dependencies
-uv sync
+# Install globally
+pip install uv
+git clone https://github.com/sarupurisailalith/codebase-cortex.git
+cd codebase-cortex && uv sync
 
-# Interactive setup (connects to Notion via OAuth)
-uv run cortex init
+# Go to your project repo
+cd /path/to/your-project
+
+# Initialize Cortex (creates .cortex/ directory, connects to Notion)
+cortex init
 
 # Run the pipeline
-uv run cortex run --once
+cortex run --once
 ```
+
+## How It Works
+
+Run `cortex init` inside any git repo. Cortex creates a `.cortex/` directory (gitignored) that stores config, OAuth tokens, and FAISS indexes. Then `cortex run` analyzes your recent commits and syncs documentation to Notion.
 
 ## Architecture
 
@@ -29,21 +38,27 @@ Codebase Cortex uses a multi-agent pipeline powered by LangGraph:
 
 | Command | Description |
 |---------|-------------|
-| `cortex init` | Interactive setup wizard |
+| `cortex init` | Interactive setup wizard (run inside your repo) |
 | `cortex run` | Run the full pipeline |
 | `cortex status` | Show connection status |
 | `cortex analyze` | One-shot diff analysis |
 | `cortex embed` | Rebuild embedding index |
 
-## Configuration
+## Per-Repo Config
 
-Copy `.env.example` to `.env` and fill in your API keys:
+`cortex init` creates a `.cortex/` directory in your repo:
 
-```bash
-cp .env.example .env
 ```
-
-Notion OAuth tokens are managed automatically by `cortex init`.
+your-project/
+├── .cortex/           # Created by cortex init (gitignored)
+│   ├── .env           # LLM provider, API keys
+│   ├── .gitignore     # Ignores everything in .cortex/
+│   ├── notion_tokens.json
+│   ├── faiss_index/
+│   └── page_cache.json
+├── src/
+└── ...
+```
 
 ## License
 

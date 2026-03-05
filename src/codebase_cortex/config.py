@@ -9,34 +9,72 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.language_models import BaseChatModel
 
+CORTEX_DIR_NAME = ".cortex"
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+
+def find_cortex_dir(start: Path | None = None) -> Path:
+    """Find the .cortex directory, starting from the given path or cwd.
+
+    Returns the .cortex path (may not exist yet — for `cortex init`).
+    """
+    start = start or Path.cwd()
+    return start.resolve() / CORTEX_DIR_NAME
 
 
 @dataclass
 class Settings:
-    """Application settings loaded from environment."""
+    """Application settings loaded from .cortex/.env in the target repo."""
 
     llm_provider: str = "google"
     google_api_key: str = ""
     anthropic_api_key: str = ""
     github_token: str = ""
-    repo_path: str = "."
-    data_dir: Path = field(default_factory=lambda: DATA_DIR)
-    notion_token_path: Path = field(default_factory=lambda: DATA_DIR / "notion_tokens.json")
+    repo_path: Path = field(default_factory=lambda: Path.cwd())
+    cortex_dir: Path = field(default_factory=lambda: find_cortex_dir())
     oauth_callback_port: int = 9876
 
+    @property
+    def data_dir(self) -> Path:
+        return self.cortex_dir
+
+    @property
+    def notion_token_path(self) -> Path:
+        return self.cortex_dir / "notion_tokens.json"
+
+    @property
+    def faiss_index_dir(self) -> Path:
+        return self.cortex_dir / "faiss_index"
+
+    @property
+    def page_cache_path(self) -> Path:
+        return self.cortex_dir / "page_cache.json"
+
+    @property
+    def env_path(self) -> Path:
+        return self.cortex_dir / ".env"
+
     @classmethod
-    def from_env(cls) -> Settings:
-        load_dotenv(PROJECT_ROOT / ".env")
+    def from_env(cls, repo_path: Path | None = None) -> Settings:
+        """Load settings from .cortex/.env in the given or current directory."""
+        repo = (repo_path or Path.cwd()).resolve()
+        cortex_dir = repo / CORTEX_DIR_NAME
+        env_file = cortex_dir / ".env"
+
+        if env_file.exists():
+            load_dotenv(env_file)
+
         return cls(
             llm_provider=os.getenv("LLM_PROVIDER", "google"),
             google_api_key=os.getenv("GOOGLE_API_KEY", ""),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             github_token=os.getenv("GITHUB_TOKEN", ""),
-            repo_path=os.getenv("REPO_PATH", "."),
+            repo_path=repo,
+            cortex_dir=cortex_dir,
         )
+
+    @property
+    def is_initialized(self) -> bool:
+        return self.env_path.exists()
 
 
 def get_llm(settings: Settings | None = None, model: str | None = None) -> BaseChatModel:

@@ -11,7 +11,7 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 
-from codebase_cortex.config import Settings, PROJECT_ROOT
+from codebase_cortex.config import Settings, CORTEX_DIR_NAME
 
 console = Console()
 
@@ -25,8 +25,15 @@ def cli() -> None:
 
 @cli.command()
 def init() -> None:
-    """Interactive setup wizard. Connects to Notion via OAuth and configures the project."""
-    console.print(Panel("Codebase Cortex Setup", style="bold blue"))
+    """Interactive setup wizard. Run this inside your project repo."""
+    cwd = Path.cwd()
+    console.print(Panel(f"Codebase Cortex Setup — {cwd.name}", style="bold blue"))
+
+    # Check if already initialized
+    cortex_dir = cwd / CORTEX_DIR_NAME
+    if cortex_dir.exists():
+        if not click.confirm(f"{CORTEX_DIR_NAME}/ already exists. Re-initialize?", default=False):
+            return
 
     # Step 1: LLM provider
     provider = click.prompt(
@@ -43,16 +50,9 @@ def init() -> None:
         api_key = click.prompt("Anthropic API key (ANTHROPIC_API_KEY)")
         key_name = "ANTHROPIC_API_KEY"
 
-    # Step 2: Repository path
-    repo_path = click.prompt(
-        "Repository path (local path or GitHub URL)",
-        default=".",
-    )
-
-    # Step 3: GitHub token (only if remote URL)
+    # Step 2: GitHub token (optional)
     github_token = ""
-    if repo_path.startswith("https://github.com") or repo_path.startswith("git@"):
-        # Try gh CLI first
+    if click.confirm("Add a GitHub token? (only needed for private repos)", default=False):
         import subprocess
 
         try:
@@ -67,37 +67,52 @@ def init() -> None:
         except (subprocess.CalledProcessError, FileNotFoundError):
             github_token = click.prompt("GitHub Personal Access Token")
 
-    # Step 4: Write .env
-    env_path = PROJECT_ROOT / ".env"
+    # Step 3: Create .cortex/ directory
+    cortex_dir.mkdir(exist_ok=True)
+
+    # Write .cortex/.env
     env_lines = [
         f"LLM_PROVIDER={provider}",
         f"{key_name}={api_key}",
-        f"REPO_PATH={repo_path}",
     ]
     if github_token:
         env_lines.append(f"GITHUB_TOKEN={github_token}")
 
+    env_path = cortex_dir / ".env"
     env_path.write_text("\n".join(env_lines) + "\n")
-    console.print(f"[green]Wrote {env_path}[/green]")
 
-    # Step 5: OAuth with Notion
+    # Write .cortex/.gitignore (ignore everything inside)
+    (cortex_dir / ".gitignore").write_text("*\n")
+
+    # Add .cortex/ to repo's .gitignore if not already there
+    repo_gitignore = cwd / ".gitignore"
+    if repo_gitignore.exists():
+        content = repo_gitignore.read_text()
+        if CORTEX_DIR_NAME not in content:
+            with open(repo_gitignore, "a") as f:
+                f.write(f"\n# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
+    else:
+        repo_gitignore.write_text(f"# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
+
+    console.print(f"[green]Created {cortex_dir}/ with config[/green]")
+
+    # Step 4: OAuth with Notion
     console.print("\n[bold]Connecting to Notion...[/bold]")
     console.print("A browser window will open for Notion authorization.")
 
     try:
-        asyncio.run(_run_oauth())
+        asyncio.run(_run_oauth(cwd))
         console.print("[green]Notion connected successfully![/green]")
     except Exception as e:
         console.print(f"[yellow]Notion OAuth skipped: {e}[/yellow]")
         console.print("You can retry later with: cortex init")
 
-    # Step 6: Bootstrap Notion pages
     console.print("\n[bold]Setup complete![/bold]")
     console.print("Run [cyan]cortex status[/cyan] to verify the connection.")
     console.print("Run [cyan]cortex run --once[/cyan] to analyze your repo.")
 
 
-async def _run_oauth() -> None:
+async def _run_oauth(repo_path: Path) -> None:
     """Execute the OAuth flow: register client, open browser, wait for callback."""
     from codebase_cortex.auth.oauth import (
         generate_pkce_pair,
@@ -110,7 +125,7 @@ async def _run_oauth() -> None:
     from codebase_cortex.auth.callback_server import wait_for_callback
     from codebase_cortex.auth.token_store import TokenData, save_tokens
 
-    settings = Settings.from_env()
+    settings = Settings.from_env(repo_path)
     port = settings.oauth_callback_port
     redirect_uri = f"http://localhost:{port}/callback"
 
@@ -170,12 +185,16 @@ async def _run_oauth() -> None:
 @click.option("--watch", is_flag=True, help="Watch for changes and run continuously.")
 @click.option("--dry-run", is_flag=True, help="Analyze without writing to Notion.")
 def run(once: bool, watch: bool, dry_run: bool) -> None:
-    """Run the Cortex pipeline."""
+    """Run the Cortex pipeline on the current repo."""
     from codebase_cortex.graph import compile_graph
     from codebase_cortex.utils.logging import get_logger
 
     logger = get_logger()
     settings = Settings.from_env()
+
+    if not settings.is_initialized:
+        console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
+        return
 
     if not once and not watch:
         once = True  # Default to single run
@@ -184,7 +203,7 @@ def run(once: bool, watch: bool, dry_run: bool) -> None:
 
     initial_state = {
         "trigger": "manual",
-        "repo_path": str(Path(settings.repo_path).resolve()),
+        "repo_path": str(settings.repo_path),
         "dry_run": dry_run,
         "errors": [],
     }
@@ -236,19 +255,16 @@ def status() -> None:
     """Show connection status and workspace info."""
     settings = Settings.from_env()
 
-    console.print(Panel("Codebase Cortex Status", style="bold blue"))
+    console.print(Panel(f"Codebase Cortex Status — {settings.repo_path.name}", style="bold blue"))
 
-    # Check .env
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        console.print(f"[green]Config:[/green] {env_path}")
-    else:
-        console.print("[red]Config:[/red] .env not found. Run 'cortex init'.")
+    # Check initialization
+    if not settings.is_initialized:
+        console.print(f"[red]Not initialized.[/red] Run 'cortex init' in this directory.")
         return
 
-    # Check LLM
+    console.print(f"[green]Config:[/green] {settings.env_path}")
     console.print(f"[green]LLM Provider:[/green] {settings.llm_provider}")
-    console.print(f"[green]Repo Path:[/green] {settings.repo_path}")
+    console.print(f"[green]Repo:[/green] {settings.repo_path}")
 
     # Check Notion tokens
     token_path = settings.notion_token_path
@@ -264,6 +280,12 @@ def status() -> None:
             console.print("[red]Notion:[/red] Token file corrupt")
     else:
         console.print("[red]Notion:[/red] Not connected. Run 'cortex init'.")
+
+    # Check FAISS index
+    if settings.faiss_index_dir.exists():
+        console.print(f"[green]Index:[/green] {settings.faiss_index_dir}")
+    else:
+        console.print("[yellow]Index:[/yellow] Not built. Run 'cortex embed'.")
 
     # Test MCP connection
     if token_path.exists():
@@ -285,17 +307,15 @@ async def _test_mcp(settings: Settings) -> None:
 
 
 @cli.command()
-@click.argument("path", default=".", type=click.Path(exists=True))
-def analyze(path: str) -> None:
+def analyze() -> None:
     """One-shot diff analysis without Notion writes."""
     from codebase_cortex.git.diff_parser import get_recent_diff
     from codebase_cortex.agents.code_analyzer import CodeAnalyzerAgent
     from codebase_cortex.config import get_llm
 
     settings = Settings.from_env()
-    repo_path = Path(path).resolve()
 
-    diff_text = get_recent_diff(str(repo_path))
+    diff_text = get_recent_diff(str(settings.repo_path))
     if not diff_text:
         console.print("[yellow]No recent changes found.[/yellow]")
         return
@@ -303,7 +323,7 @@ def analyze(path: str) -> None:
     agent = CodeAnalyzerAgent(get_llm(settings))
     state = {
         "trigger": "manual",
-        "repo_path": str(repo_path),
+        "repo_path": str(settings.repo_path),
         "diff_text": diff_text,
         "dry_run": True,
         "errors": [],
@@ -315,16 +335,15 @@ def analyze(path: str) -> None:
 
 
 @cli.command()
-@click.argument("path", default=".", type=click.Path(exists=True))
-def embed(path: str) -> None:
-    """Rebuild the embedding index for a repository."""
+def embed() -> None:
+    """Rebuild the embedding index for the current repo."""
     from codebase_cortex.embeddings.indexer import EmbeddingIndexer
     from codebase_cortex.embeddings.store import FAISSStore
     from codebase_cortex.embeddings.clustering import TopicClusterer
-    from codebase_cortex.config import DATA_DIR
 
-    repo_path = Path(path).resolve()
-    index_dir = DATA_DIR / "faiss_index"
+    settings = Settings.from_env()
+    repo_path = settings.repo_path
+    index_dir = settings.faiss_index_dir
 
     console.print(f"Indexing [cyan]{repo_path}[/cyan]...")
 

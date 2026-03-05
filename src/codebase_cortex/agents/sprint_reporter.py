@@ -80,13 +80,13 @@ Write a complete sprint report in markdown."""
     ) -> None:
         """Append sprint summary to the Sprint Log page in Notion."""
         from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
-        from codebase_cortex.config import Settings, DATA_DIR
+        from codebase_cortex.config import Settings
         from codebase_cortex.notion.page_cache import PageCache
         from codebase_cortex.utils.logging import get_logger
 
         logger = get_logger()
         settings = Settings.from_env()
-        cache = PageCache(cache_path=DATA_DIR / "page_cache.json")
+        cache = PageCache(cache_path=settings.page_cache_path)
 
         sprint_page = cache.find_by_title("Sprint Log")
 

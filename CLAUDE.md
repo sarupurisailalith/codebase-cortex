@@ -27,6 +27,13 @@ Built for Notion MCP Challenge (due March 29, 2026).
 - `uv run pytest` - Run tests
 - `uv run pytest tests/test_config.py -v` - Run specific test
 
+## Per-Repo Usage Pattern
+- Cortex is a global CLI tool that runs inside target repos
+- `cortex init` creates `.cortex/` in the target repo (gitignored)
+- Config, tokens, FAISS index all live in `.cortex/`
+- `Settings.from_env()` reads from `cwd/.cortex/.env`
+- No more PROJECT_ROOT or global DATA_DIR
+
 ## Conventions
 - Use `src/` layout with hatchling build backend
 - Type hints on all public functions

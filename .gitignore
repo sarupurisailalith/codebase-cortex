@@ -12,9 +12,8 @@ wheels/
 # Environment
 .env
 
-# Runtime data
-data/*
-!data/.gitkeep
+# Codebase Cortex per-repo data
+.cortex/
 
 # IDE
 .idea/

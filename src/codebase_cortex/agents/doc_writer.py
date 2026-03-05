@@ -5,7 +5,7 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from codebase_cortex.agents.base import BaseAgent
-from codebase_cortex.config import Settings, DATA_DIR
+from codebase_cortex.config import Settings
 from codebase_cortex.notion.page_cache import PageCache
 from codebase_cortex.state import CortexState, DocUpdate
 
@@ -91,7 +91,8 @@ Only include pages that genuinely need updating based on the changes. Respond wi
             }
 
         doc_updates: list[DocUpdate] = []
-        cache = PageCache(cache_path=DATA_DIR / "page_cache.json")
+        settings = Settings.from_env()
+        cache = PageCache(cache_path=settings.page_cache_path)
 
         for update in updates_data:
             title = update.get("title", "Untitled")

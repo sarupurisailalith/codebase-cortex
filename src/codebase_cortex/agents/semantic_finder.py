@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from codebase_cortex.agents.base import BaseAgent
-from codebase_cortex.config import DATA_DIR
+from codebase_cortex.config import Settings
 from codebase_cortex.embeddings.indexer import EmbeddingIndexer
 from codebase_cortex.embeddings.store import FAISSStore
 from codebase_cortex.state import CortexState, RelatedDoc
@@ -24,7 +24,8 @@ class SemanticFinderAgent(BaseAgent):
             return {"related_docs": []}
 
         repo_path = Path(state.get("repo_path", "."))
-        index_dir = DATA_DIR / "faiss_index"
+        settings = Settings.from_env(repo_path)
+        index_dir = settings.faiss_index_dir
 
         try:
             store = FAISSStore(index_dir=index_dir)
