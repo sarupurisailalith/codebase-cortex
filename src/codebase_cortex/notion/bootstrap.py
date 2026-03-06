@@ -252,18 +252,14 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
             title = page_info["title"]
             display_title = f"{page_info['icon']} {title}"
 
-            # Check cache first, then search Notion
+            # Only check cache — don't search the workspace, as that could
+            # find pages under a different parent from a previous init.
+            # Users adopt existing pages by moving them under the parent
+            # and running `cortex scan`.
             cached = cache.find_by_title(title)
             if cached:
                 pages.append({"title": title, "page_id": cached.page_id})
                 logger.info(f"Already exists (cached): {display_title}")
-                continue
-
-            existing_id = await search_page_by_title(session, title)
-            if existing_id:
-                cache.upsert(existing_id, title)
-                pages.append({"title": title, "page_id": existing_id})
-                logger.info(f"Found existing: {display_title}")
                 continue
 
             # Create new page under parent
