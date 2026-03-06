@@ -2,6 +2,8 @@
 
 Codebase Cortex provides the `cortex` command-line tool for managing documentation sync between your codebase and Notion.
 
+After installing (`pip install codebase-cortex`), both `cortex` and `codebase-cortex` commands are available. All examples below use `cortex`, but `codebase-cortex` works identically.
+
 ## Global Options
 
 ```bash

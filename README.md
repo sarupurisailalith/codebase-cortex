@@ -36,14 +36,25 @@ graph LR
 ### Install
 
 ```bash
-# Install from source
+# Install from PyPI
+pip install codebase-cortex
+
+# Or with uv
+uv tool install codebase-cortex
+```
+
+Both `cortex` and `codebase-cortex` commands are available after installation. If `cortex` conflicts with another package on your system, use `codebase-cortex` instead.
+
+<details>
+<summary>Install from source</summary>
+
+```bash
 git clone https://github.com/sarupurisailalith/codebase-cortex.git
 cd codebase-cortex
 uv sync
-
-# Install globally as a CLI tool
 uv tool install .
 ```
+</details>
 
 ### Initialize in your project
 

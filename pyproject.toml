@@ -1,9 +1,36 @@
 [project]
 name = "codebase-cortex"
 version = "0.1.0"
-description = "LangGraph multi-agent system that keeps engineering docs in sync with code via Notion MCP"
+description = "Multi-agent system that keeps engineering docs in sync with code via Notion MCP"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+authors = [
+    { name = "Sailalith Sarupuri", email = "sarupurisailalith@gmail.com" },
+]
+keywords = [
+    "notion",
+    "documentation",
+    "mcp",
+    "langgraph",
+    "agents",
+    "code-analysis",
+    "embeddings",
+    "faiss",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "langgraph>=0.3",
     "langchain-core>=0.3",
@@ -24,7 +51,14 @@ dependencies = [
 ]
 
 [project.scripts]
+codebase-cortex = "codebase_cortex.cli:cli"
 cortex = "codebase_cortex.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/sarupurisailalith/codebase-cortex"
+Repository = "https://github.com/sarupurisailalith/codebase-cortex"
+Documentation = "https://github.com/sarupurisailalith/codebase-cortex/tree/main/docs"
+Issues = "https://github.com/sarupurisailalith/codebase-cortex/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -32,6 +66,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codebase_cortex"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "docs/",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

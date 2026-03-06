@@ -28,6 +28,8 @@ uv tool install -e .
 
 The `-e` flag installs in editable mode — code changes take effect immediately without reinstalling.
 
+This registers both `cortex` and `codebase-cortex` as CLI commands.
+
 ## Project Structure
 
 ```
