@@ -2,7 +2,6 @@
 
 ## Project Overview
 LangGraph multi-agent system that syncs engineering docs with code via Notion MCP.
-Built for Notion MCP Challenge (due March 29, 2026).
 
 ## Tech Stack
 - Python 3.14, uv package manager
