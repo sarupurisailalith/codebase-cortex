@@ -101,17 +101,16 @@ Write a complete sprint report in markdown."""
                 content = f"# Sprint Report — Week of {week_label}\n\n{summary}"
 
                 if sprint_page:
-                    # Append to existing Sprint Log using insert_content_after
+                    # Replace Sprint Log content with latest report
                     await session.call_tool(
                         "notion-update-page",
                         arguments={
                             "page_id": sprint_page.page_id,
-                            "command": "insert_content_after",
-                            "selection_with_ellipsis": "---\n*Auto-gen...by Codebase Cortex*",
-                            "new_str": f"\n\n---\n\n{content}",
+                            "command": "replace_content",
+                            "new_str": content,
                         },
                     )
-                    logger.info(f"Appended to Sprint Log for week of {week_label}")
+                    logger.info(f"Updated Sprint Log for week of {week_label}")
                 else:
                     # Create new sprint report page
                     create_args: dict = {
