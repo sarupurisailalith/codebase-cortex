@@ -1,7 +1,7 @@
 [project]
 name = "codebase-cortex"
 version = "0.1.0"
-description = "Multi-agent system that keeps engineering docs in sync with code via Notion MCP"
+description = "AI-powered documentation autopilot — commit code, docs update themselves. Five LangGraph agents analyze diffs, find related code via FAISS embeddings, and sync Notion pages through MCP."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -12,16 +12,25 @@ keywords = [
     "notion",
     "documentation",
     "mcp",
+    "model-context-protocol",
     "langgraph",
     "agents",
+    "multi-agent",
     "code-analysis",
     "embeddings",
     "faiss",
+    "semantic-search",
+    "git",
+    "automation",
+    "developer-tools",
+    "docs-as-code",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -29,6 +38,8 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Documentation",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: Text Processing :: Markup :: Markdown",
     "Typing :: Typed",
 ]
 dependencies = [
