@@ -1,6 +1,6 @@
 [project]
 name = "codebase-cortex"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-powered documentation autopilot — commit code, docs update themselves. Five LangGraph agents analyze diffs, find related code via FAISS embeddings, and sync Notion pages through MCP."
 readme = "README.md"
 requires-python = ">=3.11"
