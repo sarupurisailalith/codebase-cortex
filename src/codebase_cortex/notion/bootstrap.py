@@ -12,6 +12,18 @@ logger = get_logger()
 
 PARENT_PAGE_TITLE = "Codebase Cortex"
 
+
+def normalize_page_id(raw_id: str) -> str:
+    """Normalize a Notion page ID to dashed UUID format.
+
+    Notion URLs use dashless IDs, but our cache stores dashed format.
+    This ensures consistent lookups.
+    """
+    clean = raw_id.replace("-", "").lower()
+    if len(clean) == 32:
+        return f"{clean[:8]}-{clean[8:12]}-{clean[12:16]}-{clean[16:20]}-{clean[20:]}"
+    return raw_id
+
 STARTER_PAGES = [
     {
         "title": "Architecture Overview",
@@ -22,11 +34,6 @@ STARTER_PAGES = [
         "title": "API Reference",
         "icon": "📡",
         "description": "Endpoints, schemas, contracts, and integration points.",
-    },
-    {
-        "title": "Knowledge Map",
-        "icon": "🗺️",
-        "description": "Topic clusters derived from code embeddings. Auto-generated.",
     },
     {
         "title": "Sprint Log",
@@ -61,7 +68,7 @@ def extract_page_id(result) -> str | None:
     uuid_pattern = r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}"
     match = re.search(uuid_pattern, text, re.IGNORECASE)
     if match:
-        return match.group(0)
+        return normalize_page_id(match.group(0))
 
     return text
 
@@ -90,11 +97,91 @@ async def search_page_by_title(session: ClientSession, title: str) -> str | None
         uuid_pattern = r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}"
         match = re.search(uuid_pattern, text, re.IGNORECASE)
         if match and title.lower() in text.lower():
-            return match.group(0)
+            return normalize_page_id(match.group(0))
 
         return None
     except Exception:
         return None
+
+
+async def discover_child_pages(settings: Settings) -> int:
+    """Discover child pages under the parent Notion page and cache them.
+
+    Fetches the parent page via MCP, extracts child page references
+    from the content, and caches any pages not already tracked.
+
+    Returns the number of newly discovered pages.
+    """
+    import re
+    from codebase_cortex.mcp_client import notion_mcp_session
+    from codebase_cortex.utils.rate_limiter import NotionRateLimiter
+    from codebase_cortex.notion.page_cache import PageCache
+
+    logger = get_logger()
+    cache = PageCache(cache_path=settings.page_cache_path)
+    parent_page = cache.find_by_title("Codebase Cortex")
+    if not parent_page:
+        return 0
+
+    rate_limiter = NotionRateLimiter()
+    discovered = 0
+
+    try:
+        async with notion_mcp_session(settings) as session:
+            await rate_limiter.acquire()
+            result = await session.call_tool(
+                "notion-fetch",
+                arguments={"id": parent_page.page_id},
+            )
+
+            if result.isError or not result.content:
+                return 0
+
+            response_text = result.content[0].text
+
+            # Extract content section (child pages are referenced there)
+            content_match = re.search(
+                r"<content>\s*(.*?)\s*</content>",
+                response_text,
+                re.DOTALL,
+            )
+            content = content_match.group(1) if content_match else response_text
+
+            # Find all UUID patterns in the content (child page references)
+            uuid_pattern = r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}"
+            raw_ids = re.findall(uuid_pattern, content, re.IGNORECASE)
+            found_ids = {normalize_page_id(pid) for pid in raw_ids}
+
+            # Remove parent's own ID
+            found_ids.discard(parent_page.page_id)
+
+            # Filter to only truly new pages (not already cached)
+            new_ids = [pid for pid in found_ids if not cache.get(pid)]
+
+            for page_id in new_ids:
+                await rate_limiter.acquire()
+                try:
+                    fetch_result = await session.call_tool(
+                        "notion-fetch",
+                        arguments={"id": page_id},
+                    )
+                    if not fetch_result.isError and fetch_result.content:
+                        page_text = fetch_result.content[0].text
+                        title_match = re.search(
+                            r'"title"\s*:\s*"([^"]+)"', page_text
+                        )
+                        if title_match:
+                            title = title_match.group(1)
+                            cache.upsert(page_id, title)
+                            discovered += 1
+                            logger.info(f"Discovered child page: {title}")
+                except Exception:
+                    pass
+
+    except Exception as e:
+        logger.warning(f"Child page discovery failed: {e}")
+
+    return discovered
 
 
 async def bootstrap_notion_pages(settings: Settings) -> list[dict]:

@@ -31,17 +31,29 @@ class BaseAgent(ABC):
         agent_name = self.__class__.__name__
 
         # Log prompt summary
-        total_chars = sum(len(m.content) for m in messages)
+        total_chars = sum(
+            len(m.content) if isinstance(m.content, str) else
+            sum(len(p.get("text", "")) if isinstance(p, dict) else len(str(p)) for p in m.content)
+            for m in messages
+        )
         self._logger.debug(
             f"LLM CALL [{agent_name}]: {len(messages)} messages, {total_chars} chars"
         )
         for m in messages:
-            self._logger.debug(
-                f"  {m.type}: {m.content[:200]}..."
-            )
+            preview = m.content[:200] if isinstance(m.content, str) else str(m.content)[:200]
+            self._logger.debug(f"  {m.type}: {preview}...")
 
         response = await self.llm.ainvoke(messages)
         content = response.content
+
+        # Some models (e.g. Gemini 3) return structured content blocks
+        # instead of a plain string. Extract text from them.
+        if isinstance(content, list):
+            content = "\n".join(
+                part["text"] if isinstance(part, dict) else str(part)
+                for part in content
+                if not isinstance(part, dict) or part.get("type") == "text"
+            )
 
         self._logger.debug(
             f"LLM RESPONSE [{agent_name}]: {len(content)} chars — {content[:200]}..."

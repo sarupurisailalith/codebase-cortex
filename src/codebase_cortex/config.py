@@ -21,13 +21,39 @@ def find_cortex_dir(start: Path | None = None) -> Path:
     return start.resolve() / CORTEX_DIR_NAME
 
 
+DEFAULT_MODELS: dict[str, str] = {
+    "google": "gemini-2.5-flash-lite",
+    "anthropic": "claude-sonnet-4-20250514",
+    "openrouter": "",  # no sensible default — user must choose
+}
+
+RECOMMENDED_MODELS: dict[str, list[str]] = {
+    "google": [
+        "gemini-2.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-pro",
+    ],
+    "anthropic": [
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-5-20251001",
+    ],
+    "openrouter": [
+        "anthropic/claude-sonnet-4",
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-3-flash-preview",
+    ],
+}
+
+
 @dataclass
 class Settings:
     """Application settings loaded from .cortex/.env in the target repo."""
 
     llm_provider: str = "google"
+    llm_model: str = ""
     google_api_key: str = ""
     anthropic_api_key: str = ""
+    openrouter_api_key: str = ""
     github_token: str = ""
     repo_path: Path = field(default_factory=lambda: Path.cwd())
     cortex_dir: Path = field(default_factory=lambda: find_cortex_dir())
@@ -63,10 +89,13 @@ class Settings:
         if env_file.exists():
             load_dotenv(env_file)
 
+        provider = os.getenv("LLM_PROVIDER", "google")
         return cls(
-            llm_provider=os.getenv("LLM_PROVIDER", "google"),
+            llm_provider=provider,
+            llm_model=os.getenv("LLM_MODEL", DEFAULT_MODELS.get(provider, "")),
             google_api_key=os.getenv("GOOGLE_API_KEY", ""),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             repo_path=repo,
             cortex_dir=cortex_dir,
@@ -82,23 +111,40 @@ def get_llm(settings: Settings | None = None, model: str | None = None) -> BaseC
 
     Args:
         settings: Application settings. Loads from env if not provided.
-        model: Override model name. Defaults based on provider.
+        model: Override model name. Uses LLM_MODEL from env, then provider default.
     """
     if settings is None:
         settings = Settings.from_env()
+
+    resolved_model = model or settings.llm_model
 
     if settings.llm_provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
         return ChatAnthropic(
-            model=model or "claude-sonnet-4-20250514",
+            model=resolved_model or DEFAULT_MODELS["anthropic"],
             api_key=settings.anthropic_api_key,
+        )
+
+    if settings.llm_provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        if not resolved_model:
+            raise ValueError(
+                "LLM_MODEL is required for OpenRouter. "
+                "Set it in .cortex/.env (e.g. LLM_MODEL=anthropic/claude-sonnet-4)"
+            )
+
+        return ChatOpenAI(
+            model=resolved_model,
+            api_key=settings.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
         )
 
     # Default: Google Gemini
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     return ChatGoogleGenerativeAI(
-        model=model or "gemini-2.0-flash",
+        model=resolved_model or DEFAULT_MODELS["google"],
         google_api_key=settings.google_api_key,
     )

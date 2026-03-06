@@ -36,9 +36,11 @@ def init() -> None:
             return
 
     # Step 1: LLM provider
+    from codebase_cortex.config import RECOMMENDED_MODELS, DEFAULT_MODELS
+
     provider = click.prompt(
         "LLM provider",
-        type=click.Choice(["google", "anthropic"]),
+        type=click.Choice(["google", "anthropic", "openrouter"]),
         default="google",
     )
 
@@ -46,9 +48,38 @@ def init() -> None:
     if provider == "google":
         api_key = click.prompt("Google API key (GOOGLE_API_KEY)")
         key_name = "GOOGLE_API_KEY"
-    else:
+    elif provider == "anthropic":
         api_key = click.prompt("Anthropic API key (ANTHROPIC_API_KEY)")
         key_name = "ANTHROPIC_API_KEY"
+    else:
+        api_key = click.prompt("OpenRouter API key (OPENROUTER_API_KEY)")
+        key_name = "OPENROUTER_API_KEY"
+
+    # Step 1b: Model selection
+    recommended = RECOMMENDED_MODELS.get(provider, [])
+    default_model = DEFAULT_MODELS.get(provider, "")
+
+    if recommended:
+        console.print("\n[bold]Recommended models:[/bold]")
+        for i, m in enumerate(recommended, 1):
+            marker = " (default)" if m == default_model else ""
+            console.print(f"  {i}. {m}{marker}")
+        console.print(f"  {len(recommended) + 1}. Custom model name")
+
+        model_choice = click.prompt(
+            "Choose model",
+            type=click.IntRange(1, len(recommended) + 1),
+            default=1,
+        )
+
+        if model_choice <= len(recommended):
+            llm_model = recommended[model_choice - 1]
+        else:
+            llm_model = click.prompt("Model name")
+    else:
+        llm_model = click.prompt("Model name")
+
+    console.print(f"[green]Model:[/green] {llm_model}")
 
     # Step 2: GitHub token (optional)
     github_token = ""
@@ -73,6 +104,7 @@ def init() -> None:
     # Write .cortex/.env
     env_lines = [
         f"LLM_PROVIDER={provider}",
+        f"LLM_MODEL={llm_model}",
         f"{key_name}={api_key}",
     ]
     if github_token:
@@ -304,6 +336,16 @@ def run(once: bool, watch: bool, dry_run: bool, full: bool, verbose: bool) -> No
         console.print("[yellow]Dry run mode — no Notion writes[/yellow]")
 
     async def _run_once():
+        # Discover any new child pages under the parent (e.g. user-moved pages)
+        from codebase_cortex.notion.bootstrap import discover_child_pages
+
+        try:
+            new_count = await discover_child_pages(settings)
+            if new_count:
+                console.print(f"[green]Discovered {new_count} new page(s) in Notion[/green]")
+        except Exception as e:
+            logger.warning(f"Page discovery failed: {e}")
+
         result = await graph.ainvoke(initial_state)
         if result.get("errors"):
             for err in result["errors"]:
@@ -431,7 +473,6 @@ def embed() -> None:
     """Rebuild the embedding index for the current repo."""
     from codebase_cortex.embeddings.indexer import EmbeddingIndexer
     from codebase_cortex.embeddings.store import FAISSStore
-    from codebase_cortex.embeddings.clustering import TopicClusterer
 
     settings = Settings.from_env()
     repo_path = settings.repo_path
@@ -454,15 +495,6 @@ def embed() -> None:
     store.build(embeddings, chunks)
     store.save()
     console.print(f"Saved FAISS index with [green]{store.size}[/green] vectors to {index_dir}")
-
-    # Run clustering
-    console.print("Clustering topics...")
-    clusterer = TopicClusterer()
-    topics = clusterer.cluster(embeddings, chunks)
-    console.print(f"Found [green]{len(topics)}[/green] topic clusters")
-
-    if topics:
-        console.print(Panel(clusterer.to_markdown(topics), title="Knowledge Map", border_style="blue"))
 
 
 @cli.command()
@@ -549,6 +581,240 @@ async def _scan_workspace(settings: Settings, query: str) -> None:
     total = len(cache.pages)
     console.print(f"\n[bold]Cache now has {total} pages.[/bold]")
     console.print("Cortex will update these pages when relevant code changes are detected.")
+
+
+@cli.command()
+@click.argument("instruction")
+@click.option("--page", "-p", multiple=True, help="Target page(s) to update. Repeatable. Auto-detects if omitted.")
+@click.option("--dry-run", is_flag=True, help="Show planned changes without writing to Notion.")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging.")
+def prompt(instruction: str, page: tuple[str, ...], dry_run: bool, verbose: bool) -> None:
+    """Send a natural language instruction to update Notion pages.
+
+    Examples:
+        cortex prompt "Make API docs more detailed with examples"
+        cortex prompt "Add error handling section" --page "API Reference"
+        cortex prompt "Update architecture diagram" -p "Architecture Overview" -p "API Reference"
+    """
+    from codebase_cortex.utils.logging import setup_logging
+
+    if verbose:
+        setup_logging(verbose=True)
+
+    settings = Settings.from_env()
+    if not settings.is_initialized:
+        console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
+        return
+
+    asyncio.run(_run_prompt(settings, instruction, list(page), dry_run))
+
+
+async def _run_prompt(
+    settings: Settings,
+    instruction: str,
+    page_filters: list[str],
+    dry_run: bool,
+) -> None:
+    """Execute a user-directed prompt against specific Notion pages."""
+    from codebase_cortex.agents.doc_writer import strip_notion_metadata
+    from codebase_cortex.config import get_llm
+    from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
+    from codebase_cortex.notion.page_cache import PageCache
+    from codebase_cortex.utils.json_parsing import parse_json_array
+    from codebase_cortex.utils.section_parser import merge_sections, parse_sections
+
+    cache = PageCache(cache_path=settings.page_cache_path)
+    doc_pages = cache.find_all_doc_pages()
+
+    if not doc_pages:
+        console.print("[red]No pages in cache. Run 'cortex run --once' first.[/red]")
+        return
+
+    # Resolve target pages
+    if page_filters:
+        targets = []
+        for name in page_filters:
+            found = cache.find_by_title(name)
+            if found:
+                targets.append(found)
+            else:
+                console.print(f"[yellow]Page not found: '{name}'[/yellow]")
+                console.print("Available pages:")
+                for p in doc_pages:
+                    console.print(f"  - {p.title}")
+                return
+    else:
+        targets = None  # LLM will auto-select
+
+    # Fetch content of target pages (or all pages if auto-selecting)
+    pages_to_fetch = targets if targets else doc_pages
+    existing: dict[str, str] = {}
+
+    console.print(f"Fetching {len(pages_to_fetch)} page(s) from Notion...")
+    try:
+        async with notion_mcp_session(settings) as session:
+            for cp in pages_to_fetch:
+                await rate_limiter.acquire()
+                try:
+                    result = await session.call_tool(
+                        "notion-fetch",
+                        arguments={"id": cp.page_id},
+                    )
+                    if not result.isError and result.content:
+                        content = strip_notion_metadata(result.content[0].text)
+                        existing[cp.title] = content
+                except Exception as e:
+                    console.print(f"[yellow]Could not fetch {cp.title}: {e}[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Failed to connect to Notion: {e}[/red]")
+        return
+
+    if not existing:
+        console.print("[red]No page content fetched.[/red]")
+        return
+
+    # Build LLM prompt
+    page_contents = ""
+    for title, content in existing.items():
+        truncated = content[:4000] + ("..." if len(content) > 4000 else "")
+        page_contents += f"\n### {title}\n```\n{truncated}\n```\n"
+
+    page_list = "\n".join(f"- {t}" for t in existing.keys())
+
+    if targets:
+        scope_note = f"Update ONLY these pages: {', '.join(p.title for p in targets)}"
+    else:
+        scope_note = (
+            "Choose which page(s) need updating based on the instruction. "
+            "Only update pages that are relevant."
+        )
+
+    llm_prompt = f"""You are a technical documentation writer. A user wants to update their Notion documentation.
+
+## User Instruction
+{instruction}
+
+## Scope
+{scope_note}
+
+## Current Page Contents
+{page_contents}
+
+## Available Pages
+{page_list}
+
+Generate updates as a JSON array. Each element has:
+- "title": Exact page title (must match one of the available pages)
+- "action": "update"
+- "section_updates": Array of sections to change. Each has:
+  - "heading": The exact markdown heading (e.g., "## API Endpoints")
+  - "content": New content for that section
+  - "action": "update" to replace existing section, or "create" to add new section
+
+Only include sections that actually change. Unchanged sections are preserved automatically.
+Respond with ONLY the JSON array."""
+
+    # Call LLM
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    llm = get_llm(settings)
+    console.print("Generating updates...")
+
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content="You are a technical documentation writer. Output only valid JSON."),
+            HumanMessage(content=llm_prompt),
+        ])
+        raw = response.content
+        if isinstance(raw, list):
+            raw = "\n".join(str(block) for block in raw)
+        updates_data = parse_json_array(raw)
+    except Exception as e:
+        console.print(f"[red]LLM call failed: {e}[/red]")
+        return
+
+    if not updates_data:
+        console.print("[yellow]No updates suggested by LLM.[/yellow]")
+        return
+
+    # Build merged content and show summary
+    planned: list[dict] = []
+    for update in updates_data:
+        title = update.get("title", "")
+        if title not in existing:
+            console.print(f"[yellow]Skipping unknown page: {title}[/yellow]")
+            continue
+
+        section_updates = update.get("section_updates", [])
+        if not section_updates:
+            continue
+
+        existing_sections = parse_sections(existing[title])
+        merged_content = merge_sections(existing_sections, section_updates)
+
+        # Find page_id
+        cached = cache.find_by_title(title)
+        if not cached:
+            continue
+
+        planned.append({
+            "page_id": cached.page_id,
+            "title": title,
+            "content": merged_content,
+            "section_updates": section_updates,
+        })
+
+    if not planned:
+        console.print("[yellow]No applicable updates.[/yellow]")
+        return
+
+    # Show summary
+    console.print(Panel("[bold]Planned Changes[/bold]", border_style="blue"))
+    for item in planned:
+        sections_desc = ", ".join(
+            f"{s.get('heading', '?')} ({s.get('action', 'update')})"
+            for s in item["section_updates"]
+        )
+        console.print(f"  [cyan]{item['title']}[/cyan]: {sections_desc}")
+
+    if dry_run:
+        console.print("\n[yellow]Dry run — no changes written.[/yellow]")
+        for item in planned:
+            console.print(Panel(
+                item["content"][:2000] + ("..." if len(item["content"]) > 2000 else ""),
+                title=f"Preview: {item['title']}",
+                border_style="dim",
+            ))
+        return
+
+    # Confirmation
+    if not click.confirm("\nApply these changes?", default=True):
+        console.print("[yellow]Cancelled.[/yellow]")
+        return
+
+    # Write to Notion
+    import hashlib
+
+    try:
+        async with notion_mcp_session(settings) as session:
+            for item in planned:
+                await rate_limiter.acquire()
+                await session.call_tool(
+                    "notion-update-page",
+                    arguments={
+                        "page_id": item["page_id"],
+                        "command": "replace_content",
+                        "new_str": item["content"],
+                    },
+                )
+                content_hash = hashlib.md5(item["content"].encode()).hexdigest()[:8]
+                cache.upsert(item["page_id"], item["title"], content_hash=content_hash)
+                console.print(f"  [green]Updated:[/green] {item['title']}")
+    except Exception as e:
+        console.print(f"[red]Failed to write to Notion: {e}[/red]")
+        return
+
+    console.print(f"\n[bold green]Done! Updated {len(planned)} page(s).[/bold green]")
 
 
 async def _link_pages(settings: Settings, page_ids: list[str]) -> None:

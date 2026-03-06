@@ -19,9 +19,11 @@ def test_should_run_docs_without_analysis():
     assert should_run_docs({"analysis": ""}) == "end"
 
 
-def test_should_run_sprint_on_schedule():
-    assert should_run_sprint({"trigger": "schedule"}) == "sprint_reporter"
+def test_should_run_sprint_with_updates():
+    assert should_run_sprint({"doc_updates": [{"title": "x"}]}) == "sprint_reporter"
+    assert should_run_sprint({"tasks_created": [{"title": "y"}]}) == "sprint_reporter"
 
 
-def test_should_run_sprint_on_manual():
-    assert should_run_sprint({"trigger": "manual"}) == "end"
+def test_should_run_sprint_no_updates():
+    assert should_run_sprint({}) == "end"
+    assert should_run_sprint({"doc_updates": [], "tasks_created": []}) == "end"

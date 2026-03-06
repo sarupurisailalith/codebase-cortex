@@ -12,6 +12,34 @@ from codebase_cortex.notion.bootstrap import extract_page_id
 from codebase_cortex.notion.page_cache import PageCache
 from codebase_cortex.state import CortexState, DocUpdate
 from codebase_cortex.utils.json_parsing import parse_json_array
+from codebase_cortex.utils.section_parser import merge_sections, parse_sections
+
+
+def _unescape_notion_text(text: str) -> str:
+    """Convert literal escape sequences from Notion MCP responses to real characters.
+
+    The Notion MCP server returns page content with literal \\n and \\t
+    (two-character sequences) instead of real newline/tab characters.
+    This converts them back so markdown parsing works correctly.
+    """
+    # Replace literal \n and \t with real characters
+    # Use a single pass to handle \n and \t without touching \\n (escaped backslash + n)
+    result = []
+    i = 0
+    while i < len(text):
+        if text[i] == '\\' and i + 1 < len(text):
+            next_char = text[i + 1]
+            if next_char == 'n':
+                result.append('\n')
+                i += 2
+                continue
+            elif next_char == 't':
+                result.append('\t')
+                i += 2
+                continue
+        result.append(text[i])
+        i += 1
+    return ''.join(result)
 
 
 def strip_notion_metadata(raw_text: str) -> str:
@@ -30,6 +58,9 @@ def strip_notion_metadata(raw_text: str) -> str:
     This function extracts only the content between <content> tags,
     or falls back to stripping all XML-like tags.
     """
+    # Notion MCP returns literal \n instead of real newlines — unescape first
+    raw_text = _unescape_notion_text(raw_text)
+
     # Try to extract content between <content> and </content>
     content_match = re.search(
         r"<content>\s*(.*?)\s*</content>",
@@ -51,20 +82,24 @@ def strip_notion_metadata(raw_text: str) -> str:
     return text.strip()
 
 SYSTEM_PROMPT = """You are a technical documentation writer. Given a code analysis
-and related existing documentation, generate clear, well-structured documentation
-updates for a Notion workspace.
+and related existing documentation, generate documentation updates for a Notion workspace.
 
-Output a JSON array of documentation updates, each with:
-- "title": Page title (match existing page titles when updating)
-- "content": COMPLETE markdown content for the page (see rules below)
-- "action": "update" if modifying existing docs, "create" if new topic
+Output a JSON array of page updates. Each element has:
+- "title": Page title (must match an existing page title when updating)
+- "action": "update" or "create"
 
-CRITICAL RULES FOR UPDATES:
-- When action is "update", you will be given the EXISTING page content.
-- You MUST PRESERVE all existing content and ADD/MERGE the new information into it.
-- Do NOT discard or replace existing sections — integrate new info into the right sections.
-- If a section already covers a topic, update it in place. If it's a new topic, add a new section.
-- The "content" field must contain the FULL merged page content (existing + new).
+For "update" actions (modifying an existing page):
+- Include "section_updates": a JSON array of ONLY the sections that changed.
+- Each section update has:
+  - "heading": The exact markdown heading (e.g., "## API Endpoints", "### Authentication")
+  - "content": The new content for that section (everything below the heading until the next heading)
+  - "action": "update" to replace an existing section, or "create" to add a new section
+- Do NOT include sections that haven't changed.
+- Match headings exactly to existing page headings (case-insensitive matching is applied).
+
+For "create" actions (new page):
+- Include "content": Full markdown content for the new page.
+- Do NOT include "section_updates".
 
 Focus on:
 - Architecture decisions and component relationships
@@ -106,6 +141,7 @@ class DocWriterAgent(BaseAgent):
                     related_context += f"```\n{doc['content'][:1500]}\n```\n"
 
         # Build existing page content section for the LLM
+        # Show section structure so the LLM knows which headings exist
         existing_content_section = ""
         if existing_pages:
             existing_content_section = "\n\n## Current Page Contents\n"
@@ -128,10 +164,12 @@ class DocWriterAgent(BaseAgent):
 ## Available Pages in Notion
 {page_list}
 
-Generate documentation updates as a JSON array. Each element should have "title", "content", and "action" fields.
-For "update" actions: MERGE new information into the existing content shown above. Do NOT discard existing content.
-For "create" actions: Write fresh content for new topics not covered by existing pages.
-Only include pages that genuinely need updating based on the changes. Respond with ONLY the JSON array."""
+Generate documentation updates as a JSON array.
+For "update" actions: include "title", "action", and "section_updates" (array of sections to change).
+  Each section_update has "heading" (e.g. "## API Endpoints"), "content" (new content for that section), and "action" ("update" or "create").
+  Only include sections that actually changed — unchanged sections will be preserved automatically.
+For "create" actions: include "title", "action", and "content" (full markdown for new page).
+Only include pages that genuinely need updating. Respond with ONLY the JSON array."""
 
         try:
             messages = [
@@ -152,12 +190,29 @@ Only include pages that genuinely need updating based on the changes. Respond wi
 
         for update in updates_data:
             title = update.get("title", "Untitled")
-            content = update.get("content", "")
             action = update.get("action", "update")
 
             # Look up existing page ID from cache
             cached = cache.find_by_title(title)
             page_id = cached.page_id if cached else None
+
+            if action == "update" and title in existing_pages:
+                # Section-level merge for existing pages
+                section_updates = update.get("section_updates")
+                if section_updates:
+                    # New format: merge only changed sections
+                    existing_sections = parse_sections(existing_pages[title])
+                    content = merge_sections(existing_sections, section_updates)
+                elif update.get("content"):
+                    # Backward compatibility: LLM returned full content
+                    content = update["content"]
+                else:
+                    continue
+            else:
+                # New page or page not in existing_pages
+                content = update.get("content", "")
+                if not content:
+                    continue
 
             doc_updates.append(DocUpdate(
                 page_id=page_id,
@@ -259,7 +314,7 @@ Only include pages that genuinely need updating based on the changes. Respond wi
                     # overwriting unrelated user pages.
 
                     if page_id:
-                        # Content already has old+new merged by LLM
+                        # Content already merged locally via section_parser
                         await session.call_tool(
                             "notion-update-page",
                             arguments={

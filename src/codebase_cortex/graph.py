@@ -60,8 +60,8 @@ def should_run_docs(state: CortexState) -> str:
 
 
 def should_run_sprint(state: CortexState) -> str:
-    """Route to sprint reporter only on schedule triggers."""
-    if state.get("trigger") == "schedule":
+    """Route to sprint reporter if there are doc updates to report."""
+    if state.get("doc_updates") or state.get("tasks_created"):
         return "sprint_reporter"
     return "end"
 

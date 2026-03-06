@@ -26,7 +26,6 @@ class SemanticFinderAgent(BaseAgent):
         repo_path = Path(state.get("repo_path", "."))
         settings = Settings.from_env(repo_path)
         index_dir = settings.faiss_index_dir
-
         try:
             # Always rebuild the index to capture new/changed files
             indexer = EmbeddingIndexer(repo_path=repo_path)
@@ -38,6 +37,7 @@ class SemanticFinderAgent(BaseAgent):
             embeddings = indexer.embed_chunks(chunks)
             store.build(embeddings, chunks)
             store.save()
+
             query_emb = indexer.embed_texts([analysis])
             if query_emb.size == 0:
                 return {"related_docs": []}
@@ -61,3 +61,4 @@ class SemanticFinderAgent(BaseAgent):
                 "related_docs": [],
                 "errors": self._append_error(state, f"Semantic search failed: {e}"),
             }
+
