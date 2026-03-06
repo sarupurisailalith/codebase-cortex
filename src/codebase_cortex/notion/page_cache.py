@@ -99,9 +99,9 @@ class PageCache:
                 return page
         return None
 
-    def find_all_doc_pages(self) -> list[CachedPage]:
-        """Return all cached pages except infrastructure pages."""
+    def find_all_doc_pages(self, parent_title: str | None = None) -> list[CachedPage]:
+        """Return all cached pages except the parent page."""
         return [
             p for p in self.pages.values()
-            if p.title != "Codebase Cortex"
+            if parent_title is None or p.title != parent_title
         ]

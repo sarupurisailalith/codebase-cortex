@@ -314,7 +314,7 @@ def run(once: bool, watch: bool, dry_run: bool, full: bool, verbose: bool) -> No
         if arch_page and arch_page.content_hash == "":
             # Pages exist but were never written with real content
             # Check if this looks like a first run after init
-            doc_pages = cache.find_all_doc_pages()
+            doc_pages = cache.find_all_doc_pages(parent_title=settings.repo_path.name)
             all_empty = all(p.content_hash == "" for p in doc_pages)
             if all_empty:
                 console.print("[cyan]First run detected — doing full codebase scan[/cyan]")
@@ -624,7 +624,7 @@ async def _run_prompt(
     from codebase_cortex.utils.section_parser import merge_sections, parse_sections
 
     cache = PageCache(cache_path=settings.page_cache_path)
-    doc_pages = cache.find_all_doc_pages()
+    doc_pages = cache.find_all_doc_pages(parent_title=settings.repo_path.name)
 
     if not doc_pages:
         console.print("[red]No pages in cache. Run 'cortex run --once' first.[/red]")

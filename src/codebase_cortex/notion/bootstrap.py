@@ -10,7 +10,9 @@ from codebase_cortex.utils.logging import get_logger
 
 logger = get_logger()
 
-PARENT_PAGE_TITLE = "Codebase Cortex"
+def get_parent_page_title(settings: Settings) -> str:
+    """Return the parent page title for a given repo (the repo directory name)."""
+    return settings.repo_path.name
 
 
 def normalize_page_id(raw_id: str) -> str:
@@ -119,7 +121,8 @@ async def discover_child_pages(settings: Settings) -> int:
 
     logger = get_logger()
     cache = PageCache(cache_path=settings.page_cache_path)
-    parent_page = cache.find_by_title("Codebase Cortex")
+    parent_title = get_parent_page_title(settings)
+    parent_page = cache.find_by_title(parent_title)
     if not parent_page:
         return 0
 
@@ -187,7 +190,7 @@ async def discover_child_pages(settings: Settings) -> int:
 async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
     """Create the starter Notion pages via MCP tools.
 
-    Creates a parent "Codebase Cortex" page, then child pages under it.
+    Creates a parent page named after the repo directory, then child pages under it.
     Searches for existing pages first to avoid duplicates.
     Seeds the page cache with all created/found pages.
 
@@ -209,7 +212,7 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
 
     async with notion_mcp_session(settings) as session:
         # Step 1: Search for existing parent page
-        parent_id = await search_page_by_title(session, PARENT_PAGE_TITLE)
+        parent_id = await search_page_by_title(session, parent_title)
 
         # Step 2: Create parent page if not found
         if not parent_id:
@@ -232,7 +235,7 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
                 )
                 parent_id = extract_page_id(result)
                 if parent_id:
-                    cache.upsert(parent_id, PARENT_PAGE_TITLE)
+                    cache.upsert(parent_id, parent_title)
                     logger.info(f"Created parent page: {parent_title}")
                 else:
                     logger.error("Failed to extract parent page ID from response")
@@ -241,8 +244,8 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
                 logger.error(f"Failed to create parent page: {e}")
                 return []
         else:
-            cache.upsert(parent_id, PARENT_PAGE_TITLE)
-            logger.info(f"Found existing parent page: {PARENT_PAGE_TITLE}")
+            cache.upsert(parent_id, parent_title)
+            logger.info(f"Found existing parent page: {parent_title}")
 
         # Step 3: Create child pages under parent
         for page_info in STARTER_PAGES:

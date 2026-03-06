@@ -91,7 +91,7 @@ Respond with a JSON array of tasks (title, description, priority). Return [] if 
         cache = PageCache(cache_path=settings.page_cache_path)
 
         task_board = cache.find_by_title("Task Board")
-        parent_page = cache.find_by_title("Codebase Cortex")
+        parent_page = cache.find_by_title(settings.repo_path.name)
         parent_id = (task_board or parent_page)
         parent_id = parent_id.page_id if parent_id else None
 

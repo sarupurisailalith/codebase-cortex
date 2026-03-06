@@ -36,13 +36,13 @@ def test_find_by_title_fuzzy_case(tmp_path: Path):
 
 def test_find_all_doc_pages(tmp_path: Path):
     cache = PageCache(cache_path=tmp_path / "cache.json")
-    cache.upsert("parent", "Codebase Cortex")
+    cache.upsert("parent", "my-repo")
     cache.upsert("id1", "Architecture Overview")
     cache.upsert("id2", "API Reference")
 
-    doc_pages = cache.find_all_doc_pages()
+    doc_pages = cache.find_all_doc_pages(parent_title="my-repo")
     titles = [p.title for p in doc_pages]
-    assert "Codebase Cortex" not in titles
+    assert "my-repo" not in titles
     assert "Architecture Overview" in titles
     assert "API Reference" in titles
 

@@ -89,7 +89,7 @@ Write a complete sprint report in markdown."""
         cache = PageCache(cache_path=settings.page_cache_path)
 
         sprint_page = cache.find_by_title("Sprint Log")
-        parent_page = cache.find_by_title("Codebase Cortex")
+        parent_page = cache.find_by_title(settings.repo_path.name)
         parent_id = (sprint_page or parent_page)
         parent_id = parent_id.page_id if parent_id else None
 

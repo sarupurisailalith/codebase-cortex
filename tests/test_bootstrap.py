@@ -41,6 +41,7 @@ async def test_discover_child_pages_no_parent(tmp_path):
 
     settings = MagicMock()
     settings.page_cache_path = cache_path
+    settings.repo_path.name = "my-repo"
 
     count = await discover_child_pages(settings)
     assert count == 0
@@ -53,11 +54,12 @@ async def test_discover_child_pages_finds_new(tmp_path):
 
     cache_path = tmp_path / "cache.json"
     cache = PageCache(cache_path=cache_path)
-    cache.upsert("parent-id-0000-0000-000000000001", "Codebase Cortex")
+    cache.upsert("parent-id-0000-0000-000000000001", "my-repo")
 
     settings = MagicMock()
     settings.page_cache_path = cache_path
     settings.notion_token_path = tmp_path / "tokens.json"
+    settings.repo_path.name = "my-repo"
 
     # Mock the parent page response with a child page UUID in content
     child_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -114,7 +116,7 @@ async def test_discover_child_pages_skips_cached(tmp_path):
 
     cache_path = tmp_path / "cache.json"
     cache = PageCache(cache_path=cache_path)
-    cache.upsert("parent-id-0000-0000-000000000001", "Codebase Cortex")
+    cache.upsert("parent-id-0000-0000-000000000001", "my-repo")
 
     child_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     cache.upsert(child_id, "Already Cached Page")
@@ -122,6 +124,7 @@ async def test_discover_child_pages_skips_cached(tmp_path):
     settings = MagicMock()
     settings.page_cache_path = cache_path
     settings.notion_token_path = tmp_path / "tokens.json"
+    settings.repo_path.name = "my-repo"
 
     parent_response = MagicMock()
     parent_response.isError = False

@@ -118,6 +118,22 @@ graph TD
 4. **TaskCreator** — Identifies undocumented areas and creates task pages in Notion
 5. **SprintReporter** — Synthesizes all activity into a weekly sprint summary
 
+## Notion Page Structure
+
+When you run `cortex init`, Cortex creates a parent page in Notion **named after your repository directory**. All documentation pages are created as children of this parent:
+
+```
+your-project/          (repo directory)
+  └── Notion:
+      📄 your-project              ← parent page (named after repo)
+        ├── 🏗️ Architecture Overview
+        ├── 📡 API Reference
+        ├── 📋 Sprint Log
+        └── ✅ Task Board
+```
+
+Each repo gets its own parent page — if you use Cortex in multiple projects, they each get an independent page tree. To bring existing Notion pages under Cortex management, simply move them under the parent page in Notion and run `cortex scan` to discover them.
+
 ## Architecture
 
 For detailed architecture documentation, see [`docs/architecture.md`](docs/architecture.md).

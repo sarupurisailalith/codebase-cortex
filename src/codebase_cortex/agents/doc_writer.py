@@ -150,7 +150,7 @@ class DocWriterAgent(BaseAgent):
                 existing_content_section += f"\n### {title}\n```\n{truncated}\n```\n"
 
         # Build dynamic page list from cache
-        doc_pages = cache.find_all_doc_pages()
+        doc_pages = cache.find_all_doc_pages(parent_title=settings.repo_path.name)
         page_list = "\n".join(f"- {p.title}" for p in doc_pages) if doc_pages else "- (no pages yet)"
 
         # Ask LLM to generate doc updates
@@ -240,8 +240,8 @@ Only include pages that genuinely need updating. Respond with ONLY the JSON arra
         logger = get_logger()
         existing: dict[str, str] = {}
 
-        # Fetch all doc pages (skip infrastructure-only pages)
-        doc_pages = cache.find_all_doc_pages()
+        # Fetch all doc pages (skip parent page)
+        doc_pages = cache.find_all_doc_pages(parent_title=settings.repo_path.name)
         # Limit to 10 pages to avoid excessive API calls
         pages_to_fetch = doc_pages[:10]
 
@@ -300,7 +300,8 @@ Only include pages that genuinely need updating. Respond with ONLY the JSON arra
         settings = Settings.from_env()
 
         # Get parent page for new pages
-        parent_page = cache.find_by_title("Codebase Cortex")
+        parent_title = settings.repo_path.name
+        parent_page = cache.find_by_title(parent_title)
         parent_id = parent_page.page_id if parent_page else None
 
         try:
