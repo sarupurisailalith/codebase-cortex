@@ -726,8 +726,13 @@ Respond with ONLY the JSON array."""
             HumanMessage(content=llm_prompt),
         ])
         raw = response.content
+        # Gemini 3 returns structured content blocks instead of plain strings
         if isinstance(raw, list):
-            raw = "\n".join(str(block) for block in raw)
+            raw = "\n".join(
+                part["text"] if isinstance(part, dict) else str(part)
+                for part in raw
+                if not isinstance(part, dict) or part.get("type") == "text"
+            )
         updates_data = parse_json_array(raw)
     except Exception as e:
         console.print(f"[red]LLM call failed: {e}[/red]")
