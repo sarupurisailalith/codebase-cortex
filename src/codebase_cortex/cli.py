@@ -46,13 +46,13 @@ def init() -> None:
 
     api_key = ""
     if provider == "google":
-        api_key = click.prompt("Google API key (GOOGLE_API_KEY)")
+        api_key = click.prompt("Google API key (GOOGLE_API_KEY)", hide_input=True)
         key_name = "GOOGLE_API_KEY"
     elif provider == "anthropic":
-        api_key = click.prompt("Anthropic API key (ANTHROPIC_API_KEY)")
+        api_key = click.prompt("Anthropic API key (ANTHROPIC_API_KEY)", hide_input=True)
         key_name = "ANTHROPIC_API_KEY"
     else:
-        api_key = click.prompt("OpenRouter API key (OPENROUTER_API_KEY)")
+        api_key = click.prompt("OpenRouter API key (OPENROUTER_API_KEY)", hide_input=True)
         key_name = "OPENROUTER_API_KEY"
 
     # Step 1b: Model selection
@@ -96,7 +96,7 @@ def init() -> None:
             github_token = result.stdout.strip()
             console.print("[green]GitHub token obtained from gh CLI[/green]")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            github_token = click.prompt("GitHub Personal Access Token")
+            github_token = click.prompt("GitHub Personal Access Token", hide_input=True)
 
     # Step 3: Create .cortex/ directory
     cortex_dir.mkdir(exist_ok=True)
