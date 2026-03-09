@@ -188,20 +188,34 @@ Only include pages that genuinely need updating. Respond with ONLY the JSON arra
 
         doc_updates: list[DocUpdate] = []
 
+        # Build a normalized-title lookup for existing pages so that
+        # "API Reference" matches "📡 API Reference" regardless of emoji.
+        def _find_existing(title: str) -> str | None:
+            """Return the existing_pages key that fuzzy-matches *title*, or None."""
+            if title in existing_pages:
+                return title
+            norm = cache._normalize_title(title)
+            for key in existing_pages:
+                if cache._normalize_title(key) == norm:
+                    return key
+            return None
+
         for update in updates_data:
             title = update.get("title", "Untitled")
             action = update.get("action", "update")
 
-            # Look up existing page ID from cache
+            # Look up existing page ID from cache (handles emoji mismatch)
             cached = cache.find_by_title(title)
             page_id = cached.page_id if cached else None
 
-            if action == "update" and title in existing_pages:
+            existing_key = _find_existing(title)
+
+            if action == "update" and existing_key is not None:
                 # Section-level merge for existing pages
                 section_updates = update.get("section_updates")
                 if section_updates:
                     # New format: merge only changed sections
-                    existing_sections = parse_sections(existing_pages[title])
+                    existing_sections = parse_sections(existing_pages[existing_key])
                     content = merge_sections(existing_sections, section_updates)
                 elif update.get("content"):
                     # Backward compatibility: LLM returned full content

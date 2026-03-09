@@ -174,6 +174,24 @@ your-project/
 | [Embeddings & Search](docs/embeddings.md) | FAISS index, semantic search, HDBSCAN clustering |
 | [Contributing](docs/contributing.md) | Development setup, testing, project structure |
 
+## Changelog
+
+### 0.1.4
+- **Fix**: Resolved duplicate child pages caused by emoji title mismatch between Notion and local cache
+- **Fix**: DocWriter now uses normalized title matching for section-level merges (prevents creating duplicates when LLM returns titles with/without emoji)
+- **Fix**: Parent page creation now warns user to verify page location in Notion workspace
+
+### 0.1.3
+- **Fix**: API key input is now masked during `cortex init`
+- **Fix**: Sprint Log uses `replace_content` instead of appending on every run
+
+### 0.1.2
+- **Fix**: Dynamic parent page title (uses repo directory name instead of hardcoded "Codebase Cortex")
+- **Fix**: Child page bootstrap only checks local cache, no longer adopts unrelated workspace pages
+
+### 0.1.1
+- Initial public release
+
 ## License
 
 MIT

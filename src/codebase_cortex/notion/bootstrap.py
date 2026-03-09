@@ -237,6 +237,10 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
                 if parent_id:
                     cache.upsert(parent_id, parent_title)
                     logger.info(f"Created parent page: {parent_title}")
+                    logger.info(
+                        "Tip: Verify the parent page location in Notion — "
+                        "if it appears nested under another page, drag it to the workspace root."
+                    )
                 else:
                     logger.error("Failed to extract parent page ID from response")
                     return []
@@ -254,11 +258,10 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
 
             # Only check cache — don't search the workspace, as that could
             # find pages under a different parent from a previous init.
-            # Users adopt existing pages by moving them under the parent
-            # and running `cortex scan`.
-            cached = cache.find_by_title(title)
+            # Fuzzy match handles both plain and emoji-prefixed titles.
+            cached = cache.find_by_title(display_title) or cache.find_by_title(title)
             if cached:
-                pages.append({"title": title, "page_id": cached.page_id})
+                pages.append({"title": cached.title, "page_id": cached.page_id})
                 logger.info(f"Already exists (cached): {display_title}")
                 continue
 
@@ -285,8 +288,11 @@ async def bootstrap_notion_pages(settings: Settings) -> list[dict]:
 
                 page_id = extract_page_id(result)
                 if page_id:
-                    cache.upsert(page_id, title)
-                    pages.append({"title": title, "page_id": page_id})
+                    # Cache with display_title (includes emoji) to match
+                    # the actual Notion page title. Fuzzy matching in
+                    # find_by_title handles lookups with or without emoji.
+                    cache.upsert(page_id, display_title)
+                    pages.append({"title": display_title, "page_id": page_id})
                     logger.info(f"Created: {display_title}")
                 else:
                     logger.error(f"Failed to extract page ID for '{title}'")

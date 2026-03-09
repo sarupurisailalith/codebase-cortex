@@ -22,3 +22,5 @@ wheels/
 
 # OS
 .DS_Store
+
+ref/
