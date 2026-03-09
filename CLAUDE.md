@@ -22,7 +22,7 @@ Phases are implemented **sequentially** (01 through 08). For each phase:
 
 ### Phase Status
 - [x] Phase 1: Core Infrastructure & LLM Layer (`ref/plans/01-core-infrastructure.md`)
-- [ ] Phase 2: DocBackend Protocol & Local Docs (`ref/plans/02-docbackend-local-docs.md`)
+- [x] Phase 2: DocBackend Protocol & Local Docs (`ref/plans/02-docbackend-local-docs.md`)
 - [ ] Phase 3: New Pipeline Nodes & Graph (`ref/plans/03-pipeline-nodes.md`)
 - [ ] Phase 4: Agent Refactoring (`ref/plans/04-agent-refactoring.md`)
 - [ ] Phase 5: Embeddings Upgrades (`ref/plans/05-embeddings-upgrades.md`)
@@ -42,6 +42,7 @@ Phases are implemented **sequentially** (01 through 08). For each phase:
 ## Project Structure
 - `src/codebase_cortex/` - Main package
 - `src/codebase_cortex/agents/` - LangGraph agent nodes
+- `src/codebase_cortex/backends/` - DocBackend protocol, LocalMarkdownBackend, NotionBackend
 - `src/codebase_cortex/auth/` - OAuth 2.0 + PKCE for Notion
 - `src/codebase_cortex/embeddings/` - FAISS index + HDBSCAN clustering
 - `src/codebase_cortex/git/` - Git diff parsing, GitHub client
