@@ -4,51 +4,47 @@ from __future__ import annotations
 
 from langgraph.graph import StateGraph, START, END
 
+from codebase_cortex.config import Settings
 from codebase_cortex.state import CortexState
 
 
 async def code_analyzer_node(state: CortexState) -> dict:
     """Analyze git diffs and identify changes."""
     from codebase_cortex.agents.code_analyzer import CodeAnalyzerAgent
-    from codebase_cortex.config import get_llm
 
-    agent = CodeAnalyzerAgent(get_llm())
+    agent = CodeAnalyzerAgent(Settings.from_env())
     return await agent.run(state)
 
 
 async def semantic_finder_node(state: CortexState) -> dict:
     """Find semantically related documentation."""
     from codebase_cortex.agents.semantic_finder import SemanticFinderAgent
-    from codebase_cortex.config import get_llm
 
-    agent = SemanticFinderAgent(get_llm())
+    agent = SemanticFinderAgent(Settings.from_env())
     return await agent.run(state)
 
 
 async def doc_writer_node(state: CortexState) -> dict:
     """Write or update Notion documentation pages."""
     from codebase_cortex.agents.doc_writer import DocWriterAgent
-    from codebase_cortex.config import get_llm
 
-    agent = DocWriterAgent(get_llm())
+    agent = DocWriterAgent(Settings.from_env())
     return await agent.run(state)
 
 
 async def task_creator_node(state: CortexState) -> dict:
     """Create tasks for undocumented areas."""
     from codebase_cortex.agents.task_creator import TaskCreatorAgent
-    from codebase_cortex.config import get_llm
 
-    agent = TaskCreatorAgent(get_llm())
+    agent = TaskCreatorAgent(Settings.from_env())
     return await agent.run(state)
 
 
 async def sprint_reporter_node(state: CortexState) -> dict:
     """Generate sprint summary report."""
     from codebase_cortex.agents.sprint_reporter import SprintReporterAgent
-    from codebase_cortex.config import get_llm
 
-    agent = SprintReporterAgent(get_llm())
+    agent = SprintReporterAgent(Settings.from_env())
     return await agent.run(state)
 
 

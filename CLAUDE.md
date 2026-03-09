@@ -21,7 +21,7 @@ Phases are implemented **sequentially** (01 through 08). For each phase:
 7. Run `uv run pytest` to confirm no regressions
 
 ### Phase Status
-- [ ] Phase 1: Core Infrastructure & LLM Layer (`ref/plans/01-core-infrastructure.md`)
+- [x] Phase 1: Core Infrastructure & LLM Layer (`ref/plans/01-core-infrastructure.md`)
 - [ ] Phase 2: DocBackend Protocol & Local Docs (`ref/plans/02-docbackend-local-docs.md`)
 - [ ] Phase 3: New Pipeline Nodes & Graph (`ref/plans/03-pipeline-nodes.md`)
 - [ ] Phase 4: Agent Refactoring (`ref/plans/04-agent-refactoring.md`)

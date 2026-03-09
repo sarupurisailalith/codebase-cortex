@@ -16,12 +16,15 @@ class FileChange(TypedDict):
 
 
 class DocUpdate(TypedDict):
-    """A documentation update to apply in Notion."""
+    """A documentation update to apply via DocBackend."""
 
-    page_id: str | None  # None = create new page
+    page_id: str | None  # None = create new page (v0.1 compat)
+    page_path: str | None  # Local file path (v0.2)
     title: str
     content: str
     action: str  # "create" | "update"
+    sections_updated: list[str]  # Headings updated (v0.2)
+    validation_needed: bool  # Flag for DocValidator (v0.2)
 
 
 class TaskItem(TypedDict):
@@ -75,3 +78,23 @@ class CortexState(TypedDict, total=False):
     # Pipeline metadata
     errors: list[str]
     mcp_tools: list
+
+    # v0.2 — Configuration & routing
+    detail_level: str  # "standard" | "detailed" | "comprehensive"
+    doc_strategy: str  # "main-only" | "branch-aware"
+    output_mode: str  # "apply" | "propose" | "dry-run"
+    backend: str  # "local" | "notion" | "confluence"
+    sync_target: str  # Optional secondary sync target
+    source_commit: str  # Git SHA that triggered this run
+    branch: str  # Current branch name
+    scope: str  # Monorepo scope (if configured)
+
+    # v0.2 — SectionRouter output
+    targeted_sections: list[dict]  # Includes human_edited flags
+
+    # v0.2 — DocValidator output
+    validated_updates: list[dict]  # doc_updates with confidence scores
+    validation_issues: list[dict]  # Flagged problems
+
+    # v0.2 — Run metrics
+    run_metrics: dict  # Serialized RunMetrics

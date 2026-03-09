@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.notion.bootstrap import extract_page_id
 from codebase_cortex.state import CortexState
@@ -59,10 +57,10 @@ Write a complete sprint report in markdown."""
 
         try:
             messages = [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ]
-            sprint_summary = await self._invoke_llm(messages)
+            sprint_summary = await self._invoke_llm(messages, node_name="sprint_reporter")
         except Exception as e:
             return {
                 "sprint_summary": "",

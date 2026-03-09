@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
 import re
 
 from codebase_cortex.agents.base import BaseAgent
@@ -173,10 +171,10 @@ Only include pages that genuinely need updating. Respond with ONLY the JSON arra
 
         try:
             messages = [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ]
-            raw = await self._invoke_llm(messages)
+            raw = await self._invoke_llm(messages, node_name="doc_writer")
 
             updates_data = parse_json_array(raw)
 

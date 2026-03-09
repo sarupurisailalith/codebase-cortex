@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from codebase_cortex.agents.base import BaseAgent
 from codebase_cortex.git.diff_parser import get_recent_diff, get_full_codebase_summary, parse_diff
 from codebase_cortex.state import CortexState
@@ -74,10 +72,10 @@ class CodeAnalyzerAgent(BaseAgent):
 
         try:
             messages = [
-                SystemMessage(content=DIFF_SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
+                {"role": "system", "content": DIFF_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ]
-            analysis = await self._invoke_llm(messages)
+            analysis = await self._invoke_llm(messages, node_name="code_analyzer")
         except Exception as e:
             return {
                 "diff_text": diff_text,
@@ -107,10 +105,10 @@ class CodeAnalyzerAgent(BaseAgent):
 
         try:
             messages = [
-                SystemMessage(content=FULL_SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
+                {"role": "system", "content": FULL_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ]
-            analysis = await self._invoke_llm(messages)
+            analysis = await self._invoke_llm(messages, node_name="code_analyzer")
         except Exception as e:
             return {
                 "errors": self._append_error(state, f"LLM analysis failed: {e}"),
