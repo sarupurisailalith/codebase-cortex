@@ -27,7 +27,7 @@ CODE_EXTENSIONS = {
 SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__",
     ".pytest_cache", "dist", "build", ".eggs", ".tox",
-    ".mypy_cache", ".ruff_cache", ".cortex",
+    ".mypy_cache", ".ruff_cache", ".cortex", "docs",
 }
 
 # Max file size to index (100KB)
