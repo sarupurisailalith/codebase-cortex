@@ -2,7 +2,38 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Annotated, TypedDict
+
+
+def _merge_run_metrics(left: dict, right: dict) -> dict:
+    """Reducer: merge run_metrics dicts by summing token counts and costs."""
+    if not left:
+        return right
+    if not right:
+        return left
+
+    merged = dict(left)
+    for key in ("total_input_tokens", "total_output_tokens"):
+        merged[key] = merged.get(key, 0) + right.get(key, 0)
+    merged["estimated_cost_usd"] = (
+        merged.get("estimated_cost_usd", 0) + right.get("estimated_cost_usd", 0)
+    )
+
+    # Merge by_node dicts
+    by_node = dict(merged.get("by_node", {}))
+    for node, data in right.get("by_node", {}).items():
+        if node in by_node:
+            existing = by_node[node]
+            by_node[node] = {
+                "input_tokens": existing.get("input_tokens", 0) + data.get("input_tokens", 0),
+                "output_tokens": existing.get("output_tokens", 0) + data.get("output_tokens", 0),
+                "estimated_cost_usd": existing.get("estimated_cost_usd", 0) + data.get("estimated_cost_usd", 0),
+                "wall_clock_seconds": existing.get("wall_clock_seconds", 0) + data.get("wall_clock_seconds", 0),
+            }
+        else:
+            by_node[node] = data
+    merged["by_node"] = by_node
+    return merged
 
 
 class FileChange(TypedDict):
@@ -96,5 +127,5 @@ class CortexState(TypedDict, total=False):
     validated_updates: list[dict]  # doc_updates with confidence scores
     validation_issues: list[dict]  # Flagged problems
 
-    # v0.2 — Run metrics
-    run_metrics: dict  # Serialized RunMetrics
+    # v0.2 — Run metrics (aggregated via reducer across all nodes)
+    run_metrics: Annotated[dict, _merge_run_metrics]

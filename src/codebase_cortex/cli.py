@@ -190,6 +190,9 @@ def init(quick: bool) -> None:
     # Write .cortex/.gitignore (ignore everything inside)
     (cortex_dir / ".gitignore").write_text("*\n")
 
+    # Create default .cortexignore
+    _init_cortexignore(cortex_dir)
+
     # Create docs/ directory with initial files
     _init_docs_directory(cwd)
 
@@ -282,6 +285,7 @@ def _init_quick(cwd: Path) -> None:
 
     (cortex_dir / ".env").write_text("\n".join(env_lines) + "\n")
     (cortex_dir / ".gitignore").write_text("*\n")
+    _init_cortexignore(cortex_dir)
     _init_docs_directory(cwd)
 
     # Add .cortex/ to .gitignore
@@ -296,6 +300,28 @@ def _init_quick(cwd: Path) -> None:
 
     console.print(f"[green]Initialized {cortex_dir}/[/green]")
     console.print("[bold]Quick setup complete![/bold]")
+
+
+DEFAULT_CORTEXIGNORE = """\
+# .cortexignore — paths to exclude from FAISS indexing
+# Works like .gitignore: one pattern per line, supports globs
+# Directory patterns end with /
+
+# Cortex-generated docs (avoid circular indexing)
+docs/
+
+# Common non-source directories
+# vendor/
+# generated/
+# coverage/
+"""
+
+
+def _init_cortexignore(cortex_dir: Path) -> None:
+    """Create a default .cortexignore if it doesn't exist."""
+    ignore_path = cortex_dir / ".cortexignore"
+    if not ignore_path.exists():
+        ignore_path.write_text(DEFAULT_CORTEXIGNORE)
 
 
 def _init_docs_directory(cwd: Path) -> None:

@@ -5,7 +5,20 @@ from __future__ import annotations
 from langgraph.graph import StateGraph, START, END
 
 from codebase_cortex.config import Settings
+from codebase_cortex.metrics import RunMetrics
 from codebase_cortex.state import CortexState
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_agent(cls, settings=None, **kwargs):
+    """Create an agent with a fresh RunMetrics instance for state aggregation."""
+    settings = settings or Settings.from_env()
+    metrics = RunMetrics()
+    return cls(settings, metrics=metrics, **kwargs), metrics
 
 
 # ---------------------------------------------------------------------------
@@ -17,24 +30,30 @@ async def code_analyzer_node(state: CortexState) -> dict:
     """Analyze git diffs and identify changes."""
     from codebase_cortex.agents.code_analyzer import CodeAnalyzerAgent
 
-    agent = CodeAnalyzerAgent(Settings.from_env())
-    return await agent.run(state)
+    agent, metrics = _make_agent(CodeAnalyzerAgent)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def semantic_finder_node(state: CortexState) -> dict:
     """Find semantically related documentation."""
     from codebase_cortex.agents.semantic_finder import SemanticFinderAgent
 
-    agent = SemanticFinderAgent(Settings.from_env())
-    return await agent.run(state)
+    agent, metrics = _make_agent(SemanticFinderAgent)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def section_router_node(state: CortexState) -> dict:
     """Triage: identify which doc sections need updating."""
     from codebase_cortex.agents.section_router import SectionRouterAgent
 
-    agent = SectionRouterAgent(Settings.from_env())
-    return await agent.run(state)
+    agent, metrics = _make_agent(SectionRouterAgent)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def doc_writer_node(state: CortexState) -> dict:
@@ -43,16 +62,21 @@ async def doc_writer_node(state: CortexState) -> dict:
     from codebase_cortex.backends import get_backend
 
     settings = Settings.from_env()
-    agent = DocWriterAgent(settings, backend=get_backend(settings))
-    return await agent.run(state)
+    backend = get_backend(settings)
+    agent, metrics = _make_agent(DocWriterAgent, settings=settings, backend=backend)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def doc_validator_node(state: CortexState) -> dict:
     """Validate documentation accuracy against source code."""
     from codebase_cortex.agents.doc_validator import DocValidatorAgent
 
-    agent = DocValidatorAgent(Settings.from_env())
-    return await agent.run(state)
+    agent, metrics = _make_agent(DocValidatorAgent)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def toc_generator_node(state: CortexState) -> dict:
@@ -69,8 +93,11 @@ async def task_creator_node(state: CortexState) -> dict:
     from codebase_cortex.backends import get_backend
 
     settings = Settings.from_env()
-    agent = TaskCreatorAgent(settings, backend=get_backend(settings))
-    return await agent.run(state)
+    backend = get_backend(settings)
+    agent, metrics = _make_agent(TaskCreatorAgent, settings=settings, backend=backend)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def sprint_reporter_node(state: CortexState) -> dict:
@@ -79,8 +106,11 @@ async def sprint_reporter_node(state: CortexState) -> dict:
     from codebase_cortex.backends import get_backend
 
     settings = Settings.from_env()
-    agent = SprintReporterAgent(settings, backend=get_backend(settings))
-    return await agent.run(state)
+    backend = get_backend(settings)
+    agent, metrics = _make_agent(SprintReporterAgent, settings=settings, backend=backend)
+    result = await agent.run(state)
+    result["run_metrics"] = metrics.finalize()
+    return result
 
 
 async def output_router_node(state: CortexState) -> dict:

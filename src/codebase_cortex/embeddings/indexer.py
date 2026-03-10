@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import re
@@ -66,7 +67,14 @@ class EmbeddingIndexer:
     chunks: list[CodeChunk] = field(default_factory=list)
 
     def collect_chunks(self) -> list[CodeChunk]:
-        """Walk the repo and extract code chunks from all indexable files."""
+        """Walk the repo and extract code chunks from all indexable files.
+
+        Uses TreeSitterChunker for language-aware AST parsing, consistent
+        with the incremental indexing path.
+        """
+        from codebase_cortex.embeddings.chunker import TreeSitterChunker
+
+        chunker = TreeSitterChunker()
         self.chunks = []
         for file_path in self._iter_files():
             try:
@@ -74,7 +82,7 @@ class EmbeddingIndexer:
                 if not content.strip():
                     continue
                 rel_path = str(file_path.relative_to(self.repo_path))
-                chunks = self._chunk_file(rel_path, content)
+                chunks = chunker.chunk_file(Path(rel_path), content)
                 self.chunks.extend(chunks)
             except (OSError, UnicodeDecodeError):
                 continue
@@ -106,7 +114,11 @@ class EmbeddingIndexer:
         return model.encode(texts, show_progress_bar=False, convert_to_numpy=True)
 
     def _iter_files(self):
-        """Yield indexable files from the repo."""
+        """Yield indexable files from the repo.
+
+        Respects SKIP_DIRS and user-defined patterns in .cortex/.cortexignore.
+        """
+        ignore_patterns = self._load_ignore_patterns()
         for path in self.repo_path.rglob("*"):
             if any(skip in path.parts for skip in SKIP_DIRS):
                 continue
@@ -116,7 +128,45 @@ class EmbeddingIndexer:
                 continue
             if path.stat().st_size > MAX_FILE_SIZE:
                 continue
+            if ignore_patterns and self._is_ignored(path, ignore_patterns):
+                continue
             yield path
+
+    def _load_ignore_patterns(self) -> list[str]:
+        """Load patterns from .cortex/.cortexignore (gitignore-style).
+
+        Supports:
+          - Directory names: ``docs/`` skips any path containing that directory
+          - Glob patterns: ``*.generated.ts`` matches file names
+          - Path patterns: ``frontend/dist/`` matches relative paths
+          - Comments (lines starting with #) and blank lines are ignored
+        """
+        ignore_path = self.repo_path / ".cortex" / ".cortexignore"
+        if not ignore_path.exists():
+            return []
+        patterns: list[str] = []
+        for line in ignore_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            patterns.append(line)
+        return patterns
+
+    def _is_ignored(self, path: Path, patterns: list[str]) -> bool:
+        """Check if a file path matches any ignore pattern."""
+        rel = str(path.relative_to(self.repo_path))
+        for pattern in patterns:
+            # Directory pattern (e.g. "docs/" or "vendor/")
+            if pattern.endswith("/"):
+                dir_name = pattern.rstrip("/")
+                if dir_name in path.parts:
+                    return True
+                if rel.startswith(dir_name + "/"):
+                    return True
+            # Glob against filename and relative path
+            elif fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(rel, pattern):
+                return True
+        return False
 
     def _chunk_file(self, rel_path: str, content: str) -> list[CodeChunk]:
         """Split a file into meaningful chunks."""

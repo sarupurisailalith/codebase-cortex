@@ -132,8 +132,8 @@ Generate the full page content in markdown."""
                 ]
                 content = await self._invoke_llm(messages, node_name="doc_writer")
 
-                if full_scan:
-                    content = DRAFT_BANNER + content
+                # Always add draft banner to new pages for human review
+                content = DRAFT_BANNER + content
 
                 if not dry_run:
                     page_ref = await backend.write_page("", title, content, "create")

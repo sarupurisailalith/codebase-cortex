@@ -80,25 +80,52 @@ class NotionBackend:
         self.cache = PageCache(cache_path=settings.page_cache_path)
         self._parent_title = settings.repo_path.name
 
+    async def __aenter__(self) -> "NotionBackend":
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        pass
+
     # ------------------------------------------------------------------
     # DocBackend protocol methods
     # ------------------------------------------------------------------
 
     async def fetch_page_list(self) -> list[dict]:
-        """Return list of pages from the Notion page cache.
+        """Return list of pages with section heading trees from Notion.
 
-        Each dict has: ref (page_id), title, sections (empty for Notion —
-        section parsing happens in fetch_section).
+        Fetches each page's content and parses markdown headings into a
+        tree structure matching what LocalMarkdownBackend provides, so
+        SectionRouter can do section-level routing for Notion too.
         """
         doc_pages = self.cache.find_all_doc_pages(parent_title=self._parent_title)
-        return [
-            {
+        pages = []
+        for p in doc_pages:
+            content = await self._fetch_page_content(p.page_id)
+            sections = self._extract_heading_tree(content) if content else []
+            pages.append({
                 "ref": p.page_id,
                 "title": p.title,
-                "sections": [],  # Notion doesn't pre-index sections
-            }
-            for p in doc_pages
-        ]
+                "sections": sections,
+            })
+        return pages
+
+    @staticmethod
+    def _extract_heading_tree(content: str) -> list[dict]:
+        """Parse markdown content into a section heading list.
+
+        Returns a list of dicts with 'heading' and 'level' keys, matching
+        the structure used by the local backend's meta index.
+        """
+        import re as _re
+
+        sections: list[dict] = []
+        for line in content.split("\n"):
+            match = _re.match(r"^(#{1,6})\s+(.+)$", line)
+            if match:
+                level = len(match.group(1))
+                heading = match.group(0).strip()
+                sections.append({"heading": heading, "level": level})
+        return sections
 
     async def fetch_section(
         self,
