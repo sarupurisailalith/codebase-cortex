@@ -1,5 +1,37 @@
 # Embeddings & Semantic Search
 
+
+<!-- cortex:toc -->
+- [Overview](#overview)
+- [Code Chunking](#code-chunking)
+  - [TreeSitter chunking](#treesitter-chunking)
+  - [Fallback chunking](#fallback-chunking)
+  - [Chunk representation](#chunk-representation)
+  - [Supported languages (TreeSitter)](#supported-languages-treesitter)
+  - [Supported file types](#supported-file-types)
+  - [Excluded directories](#excluded-directories)
+  - [.cortexignore](#cortexignore)
+  - [File size limit](#file-size-limit)
+- [Embedding Model](#embedding-model)
+  - [Embedding generation](#embedding-generation)
+- [FAISS Index](#faiss-index)
+  - [Index type](#index-type)
+  - [Storage](#storage)
+  - [Incremental indexing](#incremental-indexing)
+  - [ID management](#id-management)
+  - [Similarity scoring](#similarity-scoring)
+  - [Search parameters](#search-parameters)
+- [HDBSCAN Clustering](#hdbscan-clustering)
+  - [How it works](#how-it-works)
+  - [Configuration](#configuration)
+  - [Knowledge Map output](#knowledge-map-output)
+  - [Topic labels](#topic-labels)
+- [Rebuilding the Index](#rebuilding-the-index)
+  - [Automatic (incremental)](#automatic-incremental)
+  - [Manual](#manual)
+- [Performance Characteristics](#performance-characteristics)
+<!-- cortex:toc:end -->
+
 Codebase Cortex uses vector embeddings to find code that is semantically related to documentation changes. This enables the pipeline to update relevant docs even when file paths don't directly match.
 
 ## Overview
@@ -7,9 +39,11 @@ Codebase Cortex uses vector embeddings to find code that is semantically related
 ```mermaid
 graph TD
     subgraph "Indexing"
-        REPO[Repository Files] --> CHUNK[Code Chunker]
+        REPO[Repository Files] --> IGNORE[.cortexignore Filter]
+        IGNORE --> CHUNK[TreeSitter Chunker]
         CHUNK --> EMBED[sentence-transformers]
-        EMBED --> FAISS[(FAISS Index)]
+        EMBED --> FAISS[(FAISS IndexIDMap)]
+        EMBED --> HASHES[File Hash Manifest]
     end
 
     subgraph "Search"
@@ -22,27 +56,39 @@ graph TD
 
 ## Code Chunking
 
-The `EmbeddingIndexer` walks your repository and extracts meaningful code chunks for embedding.
+Cortex uses AST-aware code chunking via tree-sitter for supported languages, with fallback strategies when tree-sitter is unavailable.
 
-### Chunking strategy
+### TreeSitter chunking
+
+The `TreeSitterChunker` (powered by the `tree-sitter-languages` package) parses source files into their AST and extracts meaningful code units:
 
 ```mermaid
 graph TD
-    FILE[Source File] --> CHECK{Python?}
-    CHECK -->|Yes| PY[Python Chunker]
-    CHECK -->|No| GEN[Generic Chunker]
-    PY --> FUNC[Top-level Functions]
-    PY --> CLASS[Top-level Classes]
-    PY --> MOD[Module-level<br/>if no functions/classes]
-    GEN --> WHOLE[Whole File<br/>as single chunk]
+    FILE[Source File] --> TS{tree-sitter available?}
+    TS -->|Yes| PARSE[Parse AST]
+    PARSE --> FUNC[Functions / Methods]
+    PARSE --> CLASS[Classes / Structs]
+    PARSE --> MOD[Module-level code]
+    TS -->|No| FALLBACK{Python?}
+    FALLBACK -->|Yes| REGEX[Regex Chunker]
+    FALLBACK -->|No| WHOLE[Whole File]
 ```
 
-**Python files** are chunked by:
-- Top-level function definitions (regex: `^def \w+`)
-- Top-level class definitions (regex: `^class \w+`)
-- If no functions or classes are found, the whole file is treated as a module
+Tree-sitter chunking extracts:
+- Top-level function and method definitions
+- Class, struct, and type definitions
+- Module-level code that doesn't belong to a function or class
 
-**Non-Python files** are treated as a single "module" chunk (truncated to 3,000 characters).
+### Fallback chunking
+
+When tree-sitter is not available for a given language:
+
+- **Python files** fall back to regex-based chunking:
+  - Top-level function definitions (regex: `^def \w+`)
+  - Top-level class definitions (regex: `^class \w+`)
+  - If no functions or classes are found, the whole file is treated as a module
+
+- **All other files** are treated as a single "module" chunk (truncated to 3,000 characters).
 
 ### Chunk representation
 
@@ -57,9 +103,26 @@ def function_name(arg1, arg2):
 
 The format includes the chunk type, file path, name, and full content.
 
+### Supported languages (TreeSitter)
+
+The following languages have full AST-aware chunking via tree-sitter:
+
+| Language | Extensions |
+|----------|-----------|
+| Python | `.py` |
+| JavaScript | `.js`, `.jsx` |
+| TypeScript | `.ts`, `.tsx` |
+| Go | `.go` |
+| Rust | `.rs` |
+| Java | `.java` |
+| Ruby | `.rb` |
+| PHP | `.php` |
+| C | `.c`, `.h` |
+| C++ | `.cpp`, `.hpp` |
+
 ### Supported file types
 
-Cortex indexes files with these extensions:
+Cortex indexes files with these extensions (languages without tree-sitter support use the fallback chunker):
 
 | Category | Extensions |
 |----------|-----------|
@@ -82,8 +145,26 @@ These directories are always skipped:
 ```
 .git, node_modules, __pycache__, .pytest_cache, venv, .venv,
 env, .env, build, dist, .tox, .mypy_cache, .ruff_cache,
-.eggs, *.egg-info, .cortex
+.eggs, *.egg-info, .cortex, docs
 ```
+
+Note that `docs/` is included in the default skip list to prevent circular indexing of generated documentation.
+
+### .cortexignore
+
+In addition to the built-in exclusions, users can define custom exclusion patterns in `.cortex/.cortexignore`. This file uses gitignore-style syntax:
+
+```
+# Exclude vendored dependencies
+vendor/
+third_party/
+
+# Exclude generated files
+*.generated.*
+*.min.js
+```
+
+The `.cortexignore` file is seeded with `docs/` on `cortex init` to prevent circular indexing.
 
 ### File size limit
 
@@ -117,11 +198,12 @@ embeddings = model.encode(texts, show_progress_bar=True)
 
 ### Index type
 
-Cortex uses `IndexFlatL2` — a flat (brute-force) index with L2 (Euclidean) distance:
+Cortex uses `IndexIDMap(IndexFlatL2)` -- an ID-mapped flat index with L2 (Euclidean) distance:
 
-- **Exact search** — No approximation, always finds the true nearest neighbors
-- **Best for small-medium codebases** — Up to ~100K chunks with sub-second search
-- **No training required** — Index can be built in a single pass
+- **Exact search** -- No approximation, always finds the true nearest neighbors
+- **ID-based operations** -- Supports adding and removing chunks by ID, required for incremental rebuilds
+- **Best for small-medium codebases** -- Up to ~100K chunks with sub-second search
+- **No training required** -- Index can be built in a single pass
 
 ### Storage
 
@@ -129,8 +211,29 @@ The index is persisted in `.cortex/faiss_index/`:
 
 | File | Contents |
 |------|----------|
-| `index.faiss` | Binary FAISS index (vectors) |
+| `index.faiss` | Binary FAISS index (vectors with ID mapping) |
 | `chunks.json` | Metadata for each chunk (file path, type, name, content preview) |
+| `id_map.json` | Chunk ID to FAISS index mapping |
+| `file_hashes.json` | File hash manifest for incremental rebuild tracking |
+
+### Incremental indexing
+
+Rather than rebuilding the entire index on every run, Cortex performs incremental updates:
+
+1. **Hash comparison** -- Each file's content hash is compared against the manifest at `.cortex/faiss_index/file_hashes.json`
+2. **Added/modified files** -- New or changed files are chunked, embedded, and added to the index
+3. **Deleted files** -- Chunks belonging to removed files are deleted from the index via `remove_ids()`
+4. **Unchanged files** -- Skipped entirely, preserving their existing embeddings
+
+This significantly reduces indexing time for subsequent runs on large codebases.
+
+### ID management
+
+The `store.py` module manages the mapping between chunk IDs and FAISS index positions:
+
+- `add()` -- Add new chunks with their embeddings
+- `remove_ids()` -- Remove chunks by ID (used when files are deleted or modified)
+- `get_chunk_ids_for_files()` -- Look up all chunk IDs belonging to a set of files
 
 ### Similarity scoring
 
@@ -166,8 +269,8 @@ graph LR
 
 HDBSCAN is a density-based clustering algorithm that:
 - **Automatically determines** the number of clusters
-- **Handles noise** — unclustered chunks are labeled as noise (cluster_id = -1) and excluded
-- **No fixed k** — Unlike k-means, you don't need to specify the number of clusters
+- **Handles noise** -- unclustered chunks are labeled as noise (cluster_id = -1) and excluded
+- **No fixed k** -- Unlike k-means, you don't need to specify the number of clusters
 
 ### Configuration
 
@@ -210,9 +313,9 @@ label = "directory: chunk_name1, chunk_name2, chunk_name3"
 
 ## Rebuilding the Index
 
-### Automatic
+### Automatic (incremental)
 
-The FAISS index is rebuilt automatically on each `cortex run` to capture code changes.
+The FAISS index is updated incrementally on each `cortex run`. Only files that have been added, modified, or deleted since the last run are processed.
 
 ### Manual
 
@@ -233,10 +336,11 @@ Saved FAISS index with 234 vectors to .cortex/faiss_index/
 
 | Metric | Value |
 |--------|-------|
-| Chunking | ~1 second for 1,000 files |
+| Chunking (tree-sitter) | ~1 second for 1,000 files |
 | Embedding | ~5 seconds for 500 chunks (CPU) |
 | FAISS build | < 1 second for 10,000 vectors |
 | FAISS search | < 1ms for 10,000 vectors |
+| Incremental update | ~2 seconds for 50 changed files |
 | Total (embed command) | ~10 seconds for a medium project |
 
 The embedding model runs on CPU by default. GPU acceleration is available if PyTorch has CUDA support, but is not required.

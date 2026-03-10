@@ -1,6 +1,40 @@
 # Notion Integration
 
-Codebase Cortex connects to Notion through the [Model Context Protocol (MCP)](https://developers.notion.com/docs/mcp), a standard protocol for AI tools to interact with services. This page covers the OAuth flow, MCP connection, page management, and rate limiting.
+
+<!-- cortex:toc -->
+- [Overview](#overview)
+- [Connection Architecture](#connection-architecture)
+- [Enabling Notion Sync](#enabling-notion-sync)
+- [NotionBackend Protocol](#notionbackend-protocol)
+  - [DocBackend methods](#docbackend-methods)
+  - [Page list with heading tree](#page-list-with-heading-tree)
+  - [Async context manager](#async-context-manager)
+- [OAuth 2.0 + PKCE Flow](#oauth-20--pkce-flow)
+  - [Authorization flow](#authorization-flow)
+  - [Key details](#key-details)
+  - [Token refresh](#token-refresh)
+- [MCP Connection](#mcp-connection)
+  - [MCP Tools Used](#mcp-tools-used)
+  - [Tool call examples](#tool-call-examples)
+- [Rate Limiting](#rate-limiting)
+- [Page Management](#page-management)
+  - [Parent page](#parent-page)
+  - [Starter pages](#starter-pages)
+  - [Page cache](#page-cache)
+  - [Page discovery](#page-discovery)
+  - [Title matching](#title-matching)
+- [Notion Content Encoding](#notion-content-encoding)
+<!-- cortex:toc:end -->
+
+Notion is an **optional** sync target for Codebase Cortex. The primary documentation output is local markdown files in the `docs/` directory. When Notion sync is enabled, Cortex can push local documentation to Notion pages via the [Model Context Protocol (MCP)](https://developers.notion.com/docs/mcp).
+
+## Overview
+
+In v0.2, Cortex follows a local-first approach:
+
+1. **Default** -- Documentation is generated and maintained as local markdown files in `docs/`
+2. **Optional** -- Run `cortex sync --target notion` to push local docs to Notion
+3. **On-demand auth** -- Notion OAuth is only triggered when you explicitly use the sync command
 
 ## Connection Architecture
 
@@ -8,6 +42,7 @@ Codebase Cortex connects to Notion through the [Model Context Protocol (MCP)](ht
 graph TB
     subgraph "Your Machine"
         CORTEX[Cortex CLI]
+        DOCS[docs/ directory]
         TOKENS[Token Store]
         CACHE[Page Cache]
     end
@@ -22,7 +57,8 @@ graph TB
         PAGES[Your Pages]
     end
 
-    CORTEX -->|Streamable HTTP| MCP_SERVER
+    CORTEX -->|Generate| DOCS
+    CORTEX -->|cortex sync| MCP_SERVER
     MCP_SERVER -->|API calls| API
     API --> PAGES
     CORTEX -->|Bearer token| MCP_SERVER
@@ -31,9 +67,67 @@ graph TB
     CORTEX --> CACHE
 ```
 
+## Enabling Notion Sync
+
+To use Notion as a sync target:
+
+1. Set `DOC_OUTPUT=notion` in `.cortex/.env`, or use the `--target notion` flag on the sync command
+2. On first use, Cortex triggers the OAuth flow to authorize access to your Notion workspace
+3. A `_connect_notion()` helper handles the connection for both `cortex init` and `cortex sync`
+
+```bash
+# Sync local docs to Notion
+cortex sync --target notion
+```
+
+## NotionBackend Protocol
+
+The `NotionBackend` class implements the `DocBackend` protocol, providing a uniform interface for documentation operations.
+
+### DocBackend methods
+
+| Method | Purpose |
+|--------|---------|
+| `fetch_page_list()` | Fetch all pages with heading tree structure |
+| `fetch_section()` | Read a specific section from a page |
+| `write_page()` | Write or replace an entire page |
+| `write_section()` | Write or replace a specific section |
+| `create_task()` | Create a task page |
+| `append_to_log()` | Append content to a log page |
+| `search_pages()` | Search across pages |
+
+### Page list with heading tree
+
+`NotionBackend.fetch_page_list()` fetches page content and parses headings into a tree structure, enabling section-level operations:
+
+```python
+pages = await backend.fetch_page_list()
+# Returns list of pages, each with a heading tree:
+# {
+#     "page_id": "...",
+#     "title": "Architecture Overview",
+#     "headings": [
+#         {"level": 2, "text": "System Design", "children": [
+#             {"level": 3, "text": "Components"},
+#             {"level": 3, "text": "Data Flow"}
+#         ]}
+#     ]
+# }
+```
+
+### Async context manager
+
+`NotionBackend` is an async context manager that manages the MCP session lifecycle:
+
+```python
+async with NotionBackend(settings) as backend:
+    pages = await backend.fetch_page_list()
+    await backend.write_section(page_id, section, content)
+```
+
 ## OAuth 2.0 + PKCE Flow
 
-Cortex uses OAuth 2.0 with PKCE (Proof Key for Code Exchange) for secure authorization. No manual integration setup is needed — users just click "Allow" in the browser.
+Cortex uses OAuth 2.0 with PKCE (Proof Key for Code Exchange) for secure authorization. No manual integration setup is needed -- users just click "Allow" in the browser. The OAuth flow is triggered on-demand when a Notion sync is first requested.
 
 ### Authorization flow
 
@@ -171,20 +265,24 @@ graph LR
     SEARCH --> GENERAL
 ```
 
-- **General**: 180 requests/minute (3/second) — applies to all calls
-- **Search**: 30 requests/minute (0.5/second) — applies to `notion-search` calls
+- **General**: 180 requests/minute (3/second) -- applies to all calls
+- **Search**: 30 requests/minute (0.5/second) -- applies to `notion-search` calls
 - Search calls consume from both buckets
 - If a bucket is empty, the call waits until tokens replenish
 
 ## Page Management
 
+### Parent page
+
+When syncing to Notion for the first time, Cortex automatically creates a parent page named after the repository directory. All documentation pages are nested under this parent page.
+
 ### Starter pages
 
-During `cortex init`, Cortex creates a set of starter documentation pages in Notion:
+During initial Notion sync, Cortex creates a set of starter documentation pages:
 
 | Page | Purpose |
 |------|---------|
-| Codebase Cortex | Parent page (workspace root) |
+| (repo name) | Parent page (workspace root) |
 | Architecture Overview | System design and component relationships |
 | API Reference | API contracts and interfaces |
 | Development Guide | Setup, workflow, and conventions |
@@ -202,10 +300,10 @@ Cortex maintains a local cache of tracked pages (`.cortex/page_cache.json`) that
 
 Cortex discovers pages in several ways:
 
-1. **Bootstrap** — Created during `cortex init`
-2. **Child discovery** — Scans children of the parent page on each run
-3. **Manual scan** — `cortex scan` searches the workspace
-4. **Manual link** — `cortex scan --link <id>` links a specific page
+1. **Bootstrap** -- Created during initial Notion sync
+2. **Child discovery** -- Scans children of the parent page on each sync
+3. **Manual scan** -- `cortex scan` searches the workspace
+4. **Manual link** -- `cortex scan --link <id>` links a specific page
 
 ### Title matching
 
@@ -227,7 +325,7 @@ graph LR
     C -->|"clean markdown"| D[Agent Processing]
 ```
 
-1. **`_unescape_notion_text()`** — Converts literal `\n` → real newline and `\t` → real tab
-2. **`strip_notion_metadata()`** — Extracts content from the XML-like wrapper that `notion-fetch` returns
+1. **`_unescape_notion_text()`** -- Converts literal `\n` to real newline and `\t` to real tab
+2. **`strip_notion_metadata()`** -- Extracts content from the XML-like wrapper that `notion-fetch` returns
 
-Writing content back via `notion-update-page` with `replace_content` works with real newlines — no special encoding needed.
+Writing content back via `notion-update-page` with `replace_content` works with real newlines -- no special encoding needed.

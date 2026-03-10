@@ -2,27 +2,37 @@
 
 **Automatically keep your engineering documentation in sync with code.**
 
-Codebase Cortex is a multi-agent system that watches your codebase for changes and updates your Notion documentation automatically. It uses LangGraph to orchestrate five specialized AI agents that analyze code, find related docs, write updates, create tasks, and generate sprint reports — all through the [Notion MCP](https://developers.notion.com/docs/mcp) protocol.
+Codebase Cortex is a local-first, multi-agent documentation engine that watches your codebase for changes and updates markdown documentation automatically. It uses LangGraph to orchestrate nine pipeline nodes that analyze code, route updates to specific sections, write docs, validate accuracy, generate indexes, create tasks, and produce sprint reports. Docs live as plain markdown files in your repo — no cloud dependency required. Optional sync to Notion is available via the DocBackend protocol.
 
 ```mermaid
 graph LR
     A[Git Commit] --> B[CodeAnalyzer]
     B --> C[SemanticFinder]
-    C --> D[DocWriter]
-    D --> E[TaskCreator]
-    E --> F[SprintReporter]
-    F --> G[Notion Workspace]
+    C --> D[SectionRouter]
+    D --> E[DocWriter]
+    E --> F[DocValidator]
+    F --> G[TOCGenerator]
+    G --> H[TaskCreator]
+    H --> I[SprintReporter]
+    I --> J[OutputRouter]
+    J --> K[docs/]
+    J --> L[Notion]
 ```
 
 ## Features
 
-- **Automatic doc sync** — Commit code, docs update themselves via post-commit hook
-- **Section-level updates** — Only changed sections are rewritten, preserving the rest
-- **Semantic search** — FAISS embeddings find related code across your entire codebase
-- **Natural language prompts** — `cortex prompt "Add more API examples"` to direct updates
-- **Multi-page intelligence** — Agents understand relationships across all your doc pages
-- **Sprint reports** — Weekly summaries generated from commit activity
-- **Task tracking** — Automatically identifies undocumented areas and creates Notion tasks
+- **Local-first documentation** — Docs are plain markdown in your repo's `docs/` directory. No cloud dependency required
+- **Section-level updates** — Only changed sections are rewritten, preserving human edits
+- **Human-edit preservation** — MetaIndex tracks section hashes and detects manual edits, which the pipeline protects
+- **Semantic search** — FAISS embeddings with TreeSitter-aware AST chunking find related code across your entire codebase
+- **Incremental indexing** — Only re-embeds changed files, with `.cortexignore` for custom exclusions
+- **Draft banners** — New pages are marked as drafts until reviewed; remove with `cortex accept`
+- **Multi-backend output** — DocBackend protocol with LocalMarkdownBackend (default) and NotionBackend
+- **Output modes** — `apply` writes directly, `propose` stages for review, `dry-run` previews only
+- **Sprint reports** — Weekly summaries generated from commit activity with run metrics
+- **Task tracking** — Automatically identifies undocumented areas and creates tasks
+- **Cost tracking** — Run metrics aggregate token usage, wall-clock time, and cost per pipeline run
+- **CI/CD integration** — `cortex ci` command outputs structured JSON for GitHub Actions and GitLab CI pipelines (PR impact analysis, post-merge doc updates)
 
 ## Quick Start
 
@@ -30,8 +40,7 @@ graph LR
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
-- A Notion account (free plan works)
-- An LLM API key (Google Gemini, Anthropic, or OpenRouter)
+- An LLM — cloud API key (Gemini, Anthropic, OpenRouter, OpenAI) or a local model (Ollama, vLLM, LM Studio)
 
 ### Install
 
@@ -61,8 +70,11 @@ uv tool install .
 ```bash
 cd /path/to/your-project
 
-# Interactive setup — connects to Notion, configures LLM, creates starter pages
+# Interactive setup — configures LLM, creates docs/ directory
 cortex init
+
+# Quick setup with defaults
+cortex init --quick
 
 # Run the pipeline
 cortex run --once
@@ -70,111 +82,149 @@ cortex run --once
 
 The `init` wizard will:
 1. Ask for your LLM provider and API key
-2. Open a browser for Notion OAuth authorization
-3. Create starter documentation pages in Notion
+2. Create a `.cortex/` config directory and `docs/` output directory
+3. Optionally connect to Notion via OAuth
 4. Optionally install a post-commit git hook
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `cortex init` | Interactive setup wizard |
-| `cortex run --once` | Run the full pipeline once |
-| `cortex run --once --full` | Full codebase analysis (not just recent diff) |
-| `cortex run --once --dry-run` | Analyze without writing to Notion |
-| `cortex prompt "instruction"` | Natural language doc updates |
-| `cortex prompt "..." -p "Page"` | Target specific page(s) |
+| `cortex init [--quick]` | Interactive setup wizard |
+| `cortex run --once [--full] [--dry-run]` | Run the full pipeline once |
 | `cortex status` | Show connection and config status |
-| `cortex analyze` | One-shot diff analysis (no Notion writes) |
+| `cortex analyze` | One-shot diff analysis (no doc writes) |
 | `cortex embed` | Rebuild the FAISS embedding index |
-| `cortex scan` | Discover existing Notion pages |
-| `cortex scan --link <id>` | Link a specific Notion page |
+| `cortex config show` | Display current configuration |
+| `cortex config set KEY VALUE` | Update a config value |
+| `cortex diff` | Show proposed documentation changes |
+| `cortex apply` | Apply proposed changes to `docs/` |
+| `cortex discard` | Discard proposed changes |
+| `cortex accept` | Remove draft banners after review |
+| `cortex resolve` | Resolve merge conflicts in `docs/` |
+| `cortex check` | Check documentation freshness |
+| `cortex sync --target notion` | Sync local docs to Notion (OAuth flow) |
+| `cortex ci [--on-pr] [--on-merge]` | CI/CD mode (JSON output for pipelines) |
+| `cortex map` | Generate knowledge map from FAISS clusters |
 
 ## How It Works
 
-Cortex creates a `.cortex/` directory (gitignored) in your project repo that stores configuration, OAuth tokens, and the FAISS vector index. When you run the pipeline, five agents work in sequence:
+Cortex creates a `.cortex/` directory (gitignored) in your project repo that stores configuration, OAuth tokens, and the FAISS vector index. Documentation is written as markdown files to `docs/`. When you run the pipeline, nine nodes work in sequence:
 
 ```mermaid
 graph TD
     START([Start]) --> CA[CodeAnalyzer]
     CA -->|Has analysis?| SF[SemanticFinder]
     CA -->|No changes| END1([End])
-    SF --> DW[DocWriter]
-    DW --> TC[TaskCreator]
-    TC -->|Has updates?| SR[SprintReporter]
+    SF --> SR[SectionRouter]
+    SR --> DW[DocWriter]
+    DW --> DV[DocValidator]
+    DV --> TG[TOCGenerator]
+    TG --> TC[TaskCreator]
+    TC -->|Has updates?| SPR[SprintReporter]
     TC -->|Nothing to report| END2([End])
-    SR --> END3([End])
+    SPR --> OR[OutputRouter]
+    OR -->|apply| DOCS[docs/]
+    OR -->|propose| STAGED[.cortex/proposed/]
+    OR -->|dry-run| END3([End])
 
     style CA fill:#4A90D9,color:#fff
     style SF fill:#7B68EE,color:#fff
+    style SR fill:#9B59B6,color:#fff
     style DW fill:#50C878,color:#fff
+    style DV fill:#2ECC71,color:#fff
+    style TG fill:#1ABC9C,color:#fff
     style TC fill:#FFB347,color:#fff
-    style SR fill:#FF6B6B,color:#fff
+    style SPR fill:#FF6B6B,color:#fff
+    style OR fill:#E74C3C,color:#fff
 ```
 
 1. **CodeAnalyzer** — Parses git diffs (or scans the full codebase) and produces a structured analysis of what changed
-2. **SemanticFinder** — Embeds the analysis and searches the FAISS index to find semantically related code chunks
-3. **DocWriter** — Fetches current Notion pages, generates section-level updates, and merges them deterministically
-4. **TaskCreator** — Identifies undocumented areas and creates task pages in Notion
-5. **SprintReporter** — Synthesizes all activity into a weekly sprint summary
-
-## Notion Page Structure
-
-When you run `cortex init`, Cortex creates a parent page in Notion **named after your repository directory**. All documentation pages are created as children of this parent:
-
-```
-your-project/          (repo directory)
-  └── Notion:
-      📄 your-project              ← parent page (named after repo)
-        ├── 🏗️ Architecture Overview
-        ├── 📡 API Reference
-        ├── 📋 Sprint Log
-        └── ✅ Task Board
-```
-
-Each repo gets its own parent page — if you use Cortex in multiple projects, they each get an independent page tree. To bring existing Notion pages under Cortex management, simply move them under the parent page in Notion and run `cortex scan` to discover them.
-
-## Architecture
-
-For detailed architecture documentation, see [`docs/architecture.md`](docs/architecture.md).
+2. **SemanticFinder** — Incrementally embeds changed files using TreeSitter AST chunking and searches the FAISS index for semantically related code
+3. **SectionRouter** — Reads `INDEX.md` and `.cortex-meta.json` to triage which sections in which pages need updating, respecting human-edited sections
+4. **DocWriter** — Reads only targeted sections by line range, generates updated content, and writes via the DocBackend protocol
+5. **DocValidator** — Compares generated docs against actual code for factual accuracy, flagging low-confidence sections for human review
+6. **TOCGenerator** — Regenerates TOC markers in updated files, refreshes `INDEX.md` and `.cortex-meta.json`, records run metrics
+7. **TaskCreator** — Identifies documentation gaps and creates task entries
+8. **SprintReporter** — Synthesizes all activity into a weekly sprint summary with run metrics
+9. **OutputRouter** — Applies the configured output mode (apply, propose, or dry-run)
 
 ## Per-Repo Configuration
 
 ```
 your-project/
 ├── .cortex/                    # Created by cortex init (gitignored)
-│   ├── .env                    # LLM provider, API keys
+│   ├── .env                    # LLM model, API keys, doc settings
 │   ├── .gitignore              # Ignores everything in .cortex/
-│   ├── notion_tokens.json      # OAuth tokens (auto-refreshed)
-│   ├── page_cache.json         # Tracked Notion pages
+│   ├── .cortexignore           # User-defined FAISS indexing exclusions
+│   ├── notion_tokens.json      # OAuth tokens (if Notion connected)
+│   ├── page_cache.json         # Tracked Notion pages (if connected)
+│   ├── proposed/               # Staged changes (propose mode)
 │   └── faiss_index/            # Vector embeddings
 │       ├── index.faiss
-│       └── chunks.json
-├── src/
-└── ...
+│       ├── chunks.json
+│       ├── id_map.json
+│       └── file_hashes.json
+├── docs/                       # Generated documentation (local backend)
+│   ├── INDEX.md                # Auto-generated index with heading tree
+│   ├── .cortex-meta.json       # Section hashes, human-edit tracking
+│   └── *.md                    # Documentation pages
+└── src/
 ```
 
 ## Supported LLM Providers
 
-| Provider | Models | Config Key |
-|----------|--------|------------|
-| Google Gemini | gemini-2.5-flash-lite, gemini-3-flash-preview, gemini-2.5-pro | `GOOGLE_API_KEY` |
-| Anthropic | claude-sonnet-4, claude-haiku-4.5 | `ANTHROPIC_API_KEY` |
-| OpenRouter | Any model via OpenRouter | `OPENROUTER_API_KEY` |
+Cortex uses [LiteLLM](https://docs.litellm.ai/) as a unified LLM interface. **Any LiteLLM-compatible model works** — cloud APIs, local models, or self-hosted endpoints. LiteLLM supports [100+ providers](https://docs.litellm.ai/docs/providers).
+
+| Provider | Example Model | Config |
+|----------|---------------|--------|
+| Google Gemini | `gemini/gemini-2.5-flash-lite` | `GOOGLE_API_KEY` |
+| Anthropic | `anthropic/claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
+| OpenRouter | `openrouter/google/gemini-2.5-flash-lite` | `OPENROUTER_API_KEY` |
+| Ollama (local) | `ollama/llama3` | No key needed (runs locally) |
+| vLLM (local) | `hosted_vllm/model-name` | `LLM_API_BASE=http://localhost:8000` |
+| LM Studio | `lm_studio/model-name` | `LLM_API_BASE=http://localhost:1234/v1` |
+| OpenAI | `gpt-4o` | `OPENAI_API_KEY` |
+| Azure OpenAI | `azure/gpt-4o` | `AZURE_API_KEY` + `AZURE_API_BASE` |
+
+For local models, set the model name and optionally `LLM_API_BASE` in `.cortex/.env`:
+
+```env
+LLM_MODEL=ollama/llama3
+# or
+LLM_MODEL=hosted_vllm/my-model
+LLM_API_BASE=http://localhost:8000
+```
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](docs/architecture.md) | System design, data flow, agent pipeline |
+| [Architecture](docs/architecture.md) | System design, data flow, pipeline nodes |
 | [CLI Reference](docs/cli-reference.md) | All commands, options, and examples |
-| [Agents](docs/agents.md) | How each agent works |
+| [Agents](docs/agents.md) | How each pipeline node works |
 | [Configuration](docs/configuration.md) | Setup, LLM providers, environment variables |
-| [Notion Integration](docs/notion-integration.md) | OAuth flow, MCP protocol, page management |
-| [Embeddings & Search](docs/embeddings.md) | FAISS index, semantic search, HDBSCAN clustering |
+| [Notion Integration](docs/notion-integration.md) | OAuth flow, sync protocol, page management |
+| [Embeddings & Search](docs/embeddings.md) | FAISS index, TreeSitter chunking, semantic search |
+| [CI/CD Integration](docs/ci-cd.md) | GitHub Actions, GitLab CI, branch strategies |
 | [Contributing](docs/contributing.md) | Development setup, testing, project structure |
 
 ## Changelog
+
+### 0.2.0
+- **Redesign**: Local-first multi-backend documentation engine — docs live as markdown in `docs/`, no cloud dependency required
+- **Pipeline**: 9-node LangGraph pipeline with conditional routing (added SectionRouter, DocValidator, TOCGenerator, OutputRouter)
+- **LLM**: LiteLLM unified interface replaces all langchain LLM providers
+- **Backends**: DocBackend protocol with LocalMarkdownBackend (default) and NotionBackend
+- **Embeddings**: TreeSitter AST-aware code chunking with regex fallback; incremental FAISS index rebuild (only re-embeds changed files)
+- **MetaIndex**: `.cortex-meta.json` tracks section hashes and detects human edits for preservation
+- **Exclusions**: `.cortexignore` for user-defined FAISS indexing exclusions
+- **CLI**: 11 new commands (`config`, `diff`, `apply`, `discard`, `accept`, `resolve`, `check`, `sync`, `map`, and more)
+- **Output modes**: `apply` (default), `propose` (staged for review), `dry-run` (preview only)
+- **Draft banners**: New pages marked as drafts until reviewed with `cortex accept`
+- **Metrics**: Run metrics aggregation (token usage, cost, timing) via LangGraph state reducer
+- **Branches**: Branch strategy enforcement (main-only or branch-aware)
+- **OAuth**: Service connection pattern for Notion OAuth integration
 
 ### 0.1.4
 - **Fix**: Resolved duplicate child pages caused by emoji title mismatch between Notion and local cache
