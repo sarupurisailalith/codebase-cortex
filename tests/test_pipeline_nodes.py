@@ -302,8 +302,10 @@ class TestOutputRouter:
     @pytest.mark.asyncio
     async def test_apply_mode(self, tmp_path: Path):
         from codebase_cortex.agents.output_router import OutputRouterAgent
+        from codebase_cortex.config import Settings
 
-        agent = OutputRouterAgent()
+        settings = Settings(doc_strategy="branch-aware", repo_path=tmp_path)
+        agent = OutputRouterAgent(settings=settings)
         result = await agent.run(CortexState(
             output_mode="apply",
             validated_updates=[{"title": "Arch", "action": "update", "confidence": "high"}],
@@ -314,8 +316,10 @@ class TestOutputRouter:
     @pytest.mark.asyncio
     async def test_dry_run_mode(self, tmp_path: Path):
         from codebase_cortex.agents.output_router import OutputRouterAgent
+        from codebase_cortex.config import Settings
 
-        agent = OutputRouterAgent()
+        settings = Settings(doc_strategy="branch-aware", repo_path=tmp_path)
+        agent = OutputRouterAgent(settings=settings)
         result = await agent.run(CortexState(
             output_mode="dry-run",
             validated_updates=[{"title": "API", "action": "update"}],

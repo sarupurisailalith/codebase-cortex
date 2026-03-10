@@ -1340,6 +1340,29 @@ def resolve() -> None:
         console.print("Run [cyan]cortex run --once[/cyan] to regenerate affected sections.")
 
 
+def _get_ci_context() -> dict:
+    """Detect CI environment and extract context."""
+    import os
+
+    if os.environ.get("GITHUB_ACTIONS"):
+        return {
+            "provider": "github",
+            "sha": os.environ.get("GITHUB_SHA", ""),
+            "base_ref": os.environ.get("GITHUB_BASE_REF", "main"),
+            "event": os.environ.get("GITHUB_EVENT_NAME", ""),
+            "pr_number": os.environ.get("GITHUB_PR_NUMBER", ""),
+            "repo": os.environ.get("GITHUB_REPOSITORY", ""),
+        }
+    if os.environ.get("GITLAB_CI"):
+        return {
+            "provider": "gitlab",
+            "sha": os.environ.get("CI_COMMIT_SHA", ""),
+            "base_ref": os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "main"),
+            "event": "merge_request" if os.environ.get("CI_MERGE_REQUEST_IID") else "push",
+        }
+    return {"provider": "unknown", "sha": "", "base_ref": "main", "event": ""}
+
+
 @cli.command()
 @click.option("--on-pr", is_flag=True, help="Post doc impact comment on PR.")
 @click.option("--on-merge", is_flag=True, help="Create doc update after merge.")
@@ -1348,26 +1371,23 @@ def resolve() -> None:
 def ci(on_pr: bool, on_merge: bool, auto_apply: bool, dry_run: bool) -> None:
     """CI/CD mode for automated documentation updates."""
     import json
-    import os
 
     settings = Settings.from_env()
     if not settings.is_initialized:
         console.print("[red]Not initialized.[/red]")
         return
 
-    # Read CI environment
-    github_sha = os.getenv("GITHUB_SHA", "")
-    github_event = os.getenv("GITHUB_EVENT_NAME", "")
+    ci_ctx = _get_ci_context()
 
     if on_pr:
         settings.doc_output_mode = "dry-run"
-        console.print("[cyan]CI: PR impact analysis mode[/cyan]")
+        console.print(f"[cyan]CI: PR impact analysis ({ci_ctx['provider']})[/cyan]")
     elif on_merge:
         if auto_apply:
             settings.doc_output_mode = "apply"
         else:
             settings.doc_output_mode = "propose"
-        console.print("[cyan]CI: Post-merge documentation update[/cyan]")
+        console.print(f"[cyan]CI: Post-merge doc update ({ci_ctx['provider']})[/cyan]")
 
     if dry_run:
         settings.doc_output_mode = "dry-run"
@@ -1393,8 +1413,7 @@ def ci(on_pr: bool, on_merge: bool, auto_apply: bool, dry_run: bool) -> None:
         "doc_updates": result.get("doc_updates", []),
         "tasks_created": result.get("tasks_created", []),
         "errors": result.get("errors", []),
-        "github_sha": github_sha,
-        "github_event": github_event,
+        "ci_context": ci_ctx,
     }
     console.print(json.dumps(output, indent=2))
 

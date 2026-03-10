@@ -237,3 +237,91 @@ def test_status_initialized(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "local" in result.output
     assert "standard" in result.output
+
+
+# --- CI context detection ---
+
+
+def test_get_ci_context_github(monkeypatch):
+    from codebase_cortex.cli import _get_ci_context
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+
+    ctx = _get_ci_context()
+    assert ctx["provider"] == "github"
+    assert ctx["sha"] == "abc123"
+    assert ctx["event"] == "push"
+
+
+def test_get_ci_context_gitlab(monkeypatch):
+    from codebase_cortex.cli import _get_ci_context
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("GITLAB_CI", "true")
+    monkeypatch.setenv("CI_COMMIT_SHA", "def456")
+
+    ctx = _get_ci_context()
+    assert ctx["provider"] == "gitlab"
+    assert ctx["sha"] == "def456"
+
+
+def test_get_ci_context_unknown(monkeypatch):
+    from codebase_cortex.cli import _get_ci_context
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("GITLAB_CI", raising=False)
+
+    ctx = _get_ci_context()
+    assert ctx["provider"] == "unknown"
+
+
+# --- Branch strategy enforcement ---
+
+
+def test_output_router_main_only_on_non_main_branch(tmp_path):
+    """Main-only strategy forces dry-run on non-main branches."""
+    from unittest.mock import patch
+
+    from codebase_cortex.agents.output_router import OutputRouterAgent
+    from codebase_cortex.config import Settings
+
+    settings = Settings(
+        doc_strategy="main-only",
+        repo_path=tmp_path,
+    )
+    agent = OutputRouterAgent(settings=settings)
+
+    with patch.object(OutputRouterAgent, "_get_current_branch", return_value="feature/xyz"):
+        import asyncio
+        result = asyncio.run(agent.run({
+            "output_mode": "apply",
+            "doc_updates": [{"title": "test", "action": "update"}],
+            "errors": [],
+        }))
+    # Should be forced to dry-run
+    assert "dry-run" in result.get("output_summary", "")
+
+
+def test_output_router_branch_aware_allows_apply(tmp_path):
+    """Branch-aware strategy allows apply on any branch."""
+    from unittest.mock import patch
+
+    from codebase_cortex.agents.output_router import OutputRouterAgent
+    from codebase_cortex.config import Settings
+
+    settings = Settings(
+        doc_strategy="branch-aware",
+        repo_path=tmp_path,
+    )
+    agent = OutputRouterAgent(settings=settings)
+
+    with patch.object(OutputRouterAgent, "_get_current_branch", return_value="feature/xyz"):
+        import asyncio
+        result = asyncio.run(agent.run({
+            "output_mode": "apply",
+            "doc_updates": [{"title": "test", "action": "update"}],
+            "errors": [],
+        }))
+    assert "apply" in result.get("output_summary", "")

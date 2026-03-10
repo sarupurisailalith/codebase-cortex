@@ -28,6 +28,16 @@ class OutputRouterAgent:
         output_mode = state.get("output_mode", "apply")
         settings = self.settings or Settings.from_env()
 
+        # Branch strategy enforcement: main-only forces dry-run on non-main branches
+        if settings.doc_strategy == "main-only" and output_mode != "dry-run":
+            current_branch = self._get_current_branch(settings.repo_path)
+            if current_branch and current_branch not in ("main", "master"):
+                logger.info(
+                    "Branch strategy is main-only and current branch is '%s' — "
+                    "forcing dry-run mode.", current_branch,
+                )
+                output_mode = "dry-run"
+
         updates = state.get("validated_updates", state.get("doc_updates", []))
         tasks = state.get("tasks_created", [])
         sprint = state.get("sprint_summary", "")
@@ -38,6 +48,21 @@ class OutputRouterAgent:
             return self._propose(updates, tasks, settings, state)
         else:
             return self._apply(updates, tasks, sprint, state)
+
+    @staticmethod
+    def _get_current_branch(repo_path: Path) -> str | None:
+        """Get the current git branch name."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, check=True,
+                cwd=str(repo_path),
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
 
     def _apply(
         self,

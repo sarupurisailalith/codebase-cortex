@@ -1,0 +1,41 @@
+name: Codebase Cortex
+description: Automated documentation updates via AI-powered code analysis
+
+inputs:
+  mode:
+    description: "on-pr or on-merge"
+    required: true
+  auto-apply:
+    description: "Auto-commit instead of PR (on-merge only)"
+    default: "false"
+  llm-model:
+    description: "LiteLLM model string"
+    default: "google/gemini-2.5-flash-lite"
+  detail-level:
+    description: "standard, detailed, or comprehensive"
+    default: "standard"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Codebase Cortex
+      shell: bash
+      run: pip install codebase-cortex
+
+    - name: Initialize Cortex
+      shell: bash
+      run: |
+        mkdir -p .cortex
+        cat > .cortex/.env << EOL
+        LLM_MODEL=${{ inputs.llm-model }}
+        DOC_OUTPUT=local
+        DOC_DETAIL_LEVEL=${{ inputs.detail-level }}
+        DOC_STRATEGY=main-only
+        DOC_OUTPUT_MODE=apply
+        EOL
+
+    - name: Run Cortex CI
+      shell: bash
+      run: cortex ci --${{ inputs.mode }} ${{ inputs.auto-apply == 'true' && '--auto-apply' || '' }}
+      env:
+        LLM_MODEL: ${{ inputs.llm-model }}
