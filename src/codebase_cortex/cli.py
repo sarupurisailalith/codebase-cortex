@@ -1419,6 +1419,118 @@ def ci(on_pr: bool, on_merge: bool, auto_apply: bool, dry_run: bool) -> None:
 
 
 @cli.command()
+def migrate() -> None:
+    """Migrate from Notion-only to local-first documentation.
+
+    Fetches all existing Notion pages and converts them to local markdown files
+    in docs/. Generates .cortex-meta.json and INDEX.md.
+    """
+    settings = Settings.from_env()
+
+    if not settings.is_initialized:
+        console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
+        return
+
+    if not settings.notion_token_path.exists():
+        console.print("[red]Notion not connected. Run 'cortex init' to connect.[/red]")
+        return
+
+    asyncio.run(_run_migration(settings))
+
+
+async def _run_migration(settings: Settings) -> None:
+    """Fetch Notion pages and create local docs."""
+    import hashlib
+    import json
+    import re
+
+    from codebase_cortex.backends.notion_backend import strip_notion_metadata
+    from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
+    from codebase_cortex.notion.page_cache import PageCache
+
+    cache = PageCache(cache_path=settings.page_cache_path)
+    doc_pages = cache.find_all_doc_pages(parent_title=settings.repo_path.name)
+
+    if not doc_pages:
+        console.print("[yellow]No pages in cache. Run 'cortex scan' first.[/yellow]")
+        return
+
+    docs_dir = settings.repo_path / "docs"
+    docs_dir.mkdir(exist_ok=True)
+
+    console.print(f"Migrating {len(doc_pages)} page(s) from Notion to docs/...")
+
+    meta_pages: dict = {}
+
+    try:
+        async with notion_mcp_session(settings) as session:
+            for cp in doc_pages:
+                await rate_limiter.acquire()
+                try:
+                    result = await session.call_tool(
+                        "notion-fetch",
+                        arguments={"id": cp.page_id},
+                    )
+                    if result.isError or not result.content:
+                        console.print(f"  [yellow]Skipped: {cp.title}[/yellow]")
+                        continue
+
+                    content = strip_notion_metadata(result.content[0].text)
+
+                    # Slugify title for filename
+                    slug = re.sub(r"[^\w\s-]", "", cp.title.lower())
+                    slug = re.sub(r"[\s]+", "-", slug).strip("-")
+                    filename = f"{slug}.md"
+
+                    # Add TOC marker
+                    if "<!-- cortex:toc -->" not in content:
+                        content = content + "\n\n<!-- cortex:toc -->\n<!-- /cortex:toc -->\n"
+
+                    (docs_dir / filename).write_text(content)
+                    content_hash = hashlib.md5(content.encode()).hexdigest()
+
+                    meta_pages[filename] = {
+                        "title": cp.title,
+                        "content_hash": content_hash,
+                        "cortex_hash": content_hash,
+                        "sections": {},
+                    }
+
+                    console.print(f"  [green]Migrated:[/green] {cp.title} → {filename}")
+                except Exception as e:
+                    console.print(f"  [yellow]Failed: {cp.title}: {e}[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Notion connection failed: {e}[/red]")
+        return
+
+    # Write .cortex-meta.json
+    meta = {"version": 2, "pages": meta_pages, "run_metrics": {}}
+    (docs_dir / ".cortex-meta.json").write_text(json.dumps(meta, indent=2))
+
+    # Generate INDEX.md
+    index_lines = [f"# {settings.repo_path.name} Documentation", ""]
+    index_lines.append("<!-- cortex:toc -->")
+    index_lines.append("| Page | Description |")
+    index_lines.append("|------|-------------|")
+    for fname, info in sorted(meta_pages.items()):
+        index_lines.append(f"| [{info['title']}]({fname}) | |")
+    index_lines.append("<!-- /cortex:toc -->")
+    (docs_dir / "INDEX.md").write_text("\n".join(index_lines) + "\n")
+
+    console.print(f"\n[bold green]Migration complete! {len(meta_pages)} page(s) in docs/[/bold green]")
+
+    if click.confirm("Keep syncing to Notion?", default=True):
+        # Update .env with DOC_SYNC=notion
+        env_path = settings.env_path
+        content = env_path.read_text()
+        if "DOC_SYNC=" not in content:
+            env_path.write_text(content.rstrip() + "\nDOC_SYNC=notion\n")
+        console.print("[green]Notion sync enabled.[/green]")
+
+    console.print("[green]Set DOC_OUTPUT=local in .cortex/.env to use local docs.[/green]")
+
+
+@cli.command()
 @click.option("--target", type=click.Choice(["notion"]), required=True, help="Sync target.")
 def sync(target: str) -> None:
     """Sync local docs to a remote platform."""
