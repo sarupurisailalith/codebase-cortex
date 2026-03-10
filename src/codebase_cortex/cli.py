@@ -24,9 +24,15 @@ def cli() -> None:
 
 
 @cli.command()
-def init() -> None:
+@click.option("--quick", is_flag=True, help="Fast-path setup: auto-detect LLM, skip wizard.")
+def init(quick: bool) -> None:
     """Interactive setup wizard. Run this inside your project repo."""
     cwd = Path.cwd()
+
+    if quick:
+        _init_quick(cwd)
+        return
+
     console.print(Panel(f"Codebase Cortex Setup — {cwd.name}", style="bold blue"))
 
     # Check if already initialized
@@ -35,53 +41,57 @@ def init() -> None:
         if not click.confirm(f"{CORTEX_DIR_NAME}/ already exists. Re-initialize?", default=False):
             return
 
-    # Step 1: LLM provider
-    from codebase_cortex.config import RECOMMENDED_MODELS, DEFAULT_MODELS
+    # Step 1: LLM model (LiteLLM provider/model format)
+    from codebase_cortex.config import RECOMMENDED_MODELS
 
-    provider = click.prompt(
-        "LLM provider",
-        type=click.Choice(["google", "anthropic", "openrouter"]),
-        default="google",
+    console.print("\n[bold]LLM Model (LiteLLM format: provider/model)[/bold]")
+    console.print("  Examples: google/gemini-2.5-flash-lite, anthropic/claude-sonnet-4-20250514")
+    console.print("  See: https://docs.litellm.ai/docs/providers")
+
+    all_models = [m for models in RECOMMENDED_MODELS.values() for m in models]
+    console.print("\n[bold]Recommended models:[/bold]")
+    for i, m in enumerate(all_models, 1):
+        console.print(f"  {i}. {m}")
+    console.print(f"  {len(all_models) + 1}. Custom model name")
+
+    model_choice = click.prompt(
+        "Choose model",
+        type=click.IntRange(1, len(all_models) + 1),
+        default=1,
     )
-
-    api_key = ""
-    if provider == "google":
-        api_key = click.prompt("Google API key (GOOGLE_API_KEY)", hide_input=True)
-        key_name = "GOOGLE_API_KEY"
-    elif provider == "anthropic":
-        api_key = click.prompt("Anthropic API key (ANTHROPIC_API_KEY)", hide_input=True)
-        key_name = "ANTHROPIC_API_KEY"
+    if model_choice <= len(all_models):
+        llm_model = all_models[model_choice - 1]
     else:
-        api_key = click.prompt("OpenRouter API key (OPENROUTER_API_KEY)", hide_input=True)
-        key_name = "OPENROUTER_API_KEY"
-
-    # Step 1b: Model selection
-    recommended = RECOMMENDED_MODELS.get(provider, [])
-    default_model = DEFAULT_MODELS.get(provider, "")
-
-    if recommended:
-        console.print("\n[bold]Recommended models:[/bold]")
-        for i, m in enumerate(recommended, 1):
-            marker = " (default)" if m == default_model else ""
-            console.print(f"  {i}. {m}{marker}")
-        console.print(f"  {len(recommended) + 1}. Custom model name")
-
-        model_choice = click.prompt(
-            "Choose model",
-            type=click.IntRange(1, len(recommended) + 1),
-            default=1,
-        )
-
-        if model_choice <= len(recommended):
-            llm_model = recommended[model_choice - 1]
-        else:
-            llm_model = click.prompt("Model name")
-    else:
-        llm_model = click.prompt("Model name")
+        llm_model = click.prompt("Model name (provider/model)")
 
     console.print(f"[green]Model:[/green] {llm_model}")
 
-    # Step 2: GitHub token (optional)
+    # Step 1b: API key (LiteLLM reads standard env vars, but we store as LLM_API_KEY too)
+    api_key = click.prompt("API key", hide_input=True)
+
+    # Step 2: Documentation config
+    doc_output = click.prompt(
+        "Documentation backend",
+        type=click.Choice(["local", "notion"]),
+        default="local",
+    )
+
+    detail_level = click.prompt(
+        "Detail level",
+        type=click.Choice(["standard", "detailed", "comprehensive"]),
+        default="standard",
+    )
+
+    # Model quality recommendation
+    _show_model_recommendation(llm_model, detail_level)
+
+    branch_strategy = click.prompt(
+        "Branch strategy",
+        type=click.Choice(["main-only", "branch-aware"]),
+        default="main-only",
+    )
+
+    # Step 3: GitHub token (optional)
     github_token = ""
     if click.confirm("Add a GitHub token? (only needed for private repos)", default=False):
         import subprocess
@@ -98,15 +108,28 @@ def init() -> None:
         except (subprocess.CalledProcessError, FileNotFoundError):
             github_token = click.prompt("GitHub Personal Access Token", hide_input=True)
 
-    # Step 3: Create .cortex/ directory
+    # Step 4: Create .cortex/ directory and docs/
     cortex_dir.mkdir(exist_ok=True)
 
-    # Write .cortex/.env
+    # Write .cortex/.env — LiteLLM format
+    # LiteLLM reads provider-specific env vars automatically (GOOGLE_API_KEY, etc.)
+    # We also store as LLM_API_KEY for explicit passthrough
+    provider = llm_model.split("/")[0] if "/" in llm_model else ""
+    provider_key_map = {"google": "GOOGLE_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+    provider_key_name = provider_key_map.get(provider, "")
+
     env_lines = [
-        f"LLM_PROVIDER={provider}",
         f"LLM_MODEL={llm_model}",
-        f"{key_name}={api_key}",
+        f"LLM_API_KEY={api_key}",
     ]
+    if provider_key_name:
+        env_lines.append(f"{provider_key_name}={api_key}")
+    env_lines.extend([
+        f"DOC_OUTPUT={doc_output}",
+        f"DOC_DETAIL_LEVEL={detail_level}",
+        f"DOC_STRATEGY={branch_strategy}",
+        "DOC_OUTPUT_MODE=apply",
+    ])
     if github_token:
         env_lines.append(f"GITHUB_TOKEN={github_token}")
 
@@ -115,6 +138,9 @@ def init() -> None:
 
     # Write .cortex/.gitignore (ignore everything inside)
     (cortex_dir / ".gitignore").write_text("*\n")
+
+    # Create docs/ directory with initial files
+    _init_docs_directory(cwd)
 
     # Add .cortex/ to repo's .gitignore if not already there
     repo_gitignore = cwd / ".gitignore"
@@ -128,7 +154,7 @@ def init() -> None:
 
     console.print(f"[green]Created {cortex_dir}/ with config[/green]")
 
-    # Step 4: Git hook
+    # Step 5: Git hook
     git_dir = cwd / ".git"
     if git_dir.is_dir():
         if click.confirm("Auto-run Cortex after each git commit?", default=True):
@@ -141,36 +167,127 @@ def init() -> None:
     else:
         console.print("[yellow]Not a git repo — skipping git hook setup.[/yellow]")
 
-    # Step 5: OAuth with Notion
-    console.print("\n[bold]Connecting to Notion...[/bold]")
-    console.print("A browser window will open for Notion authorization.")
+    # Step 6: Notion (optional)
+    if doc_output == "notion" or click.confirm("Sync to Notion? (optional)", default=False):
+        console.print("\n[bold]Connecting to Notion...[/bold]")
+        console.print("A browser window will open for Notion authorization.")
 
-    notion_connected = False
-    try:
-        asyncio.run(_run_oauth(cwd))
-        console.print("[green]Notion connected successfully![/green]")
-        notion_connected = True
-    except Exception as e:
-        console.print(f"[yellow]Notion OAuth skipped: {e}[/yellow]")
-        console.print("You can retry later with: cortex init")
-
-    # Step 6: Bootstrap Notion pages
-    if notion_connected:
-        console.print("\n[bold]Setting up Notion workspace...[/bold]")
+        notion_connected = False
         try:
-            pages = asyncio.run(_bootstrap_pages(cwd))
-            if pages:
-                console.print(f"[green]Created {len(pages)} pages in Notion[/green]")
-                for p in pages:
-                    console.print(f"  - {p['title']}")
-            else:
-                console.print("[yellow]No pages created (may already exist)[/yellow]")
+            asyncio.run(_run_oauth(cwd))
+            console.print("[green]Notion connected successfully![/green]")
+            notion_connected = True
         except Exception as e:
-            console.print(f"[yellow]Page bootstrap skipped: {e}[/yellow]")
+            console.print(f"[yellow]Notion OAuth skipped: {e}[/yellow]")
+            console.print("You can retry later with: cortex init")
+
+        if notion_connected:
+            console.print("\n[bold]Setting up Notion workspace...[/bold]")
+            try:
+                pages = asyncio.run(_bootstrap_pages(cwd))
+                if pages:
+                    console.print(f"[green]Created {len(pages)} pages in Notion[/green]")
+                    for p in pages:
+                        console.print(f"  - {p['title']}")
+                else:
+                    console.print("[yellow]No pages created (may already exist)[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]Page bootstrap skipped: {e}[/yellow]")
 
     console.print("\n[bold]Setup complete![/bold]")
-    console.print("Run [cyan]cortex status[/cyan] to verify the connection.")
+    console.print("Run [cyan]cortex status[/cyan] to verify.")
     console.print("Run [cyan]cortex run --once[/cyan] to analyze your repo.")
+
+
+def _init_quick(cwd: Path) -> None:
+    """Fast-path init: auto-detect LLM, set defaults, create docs."""
+    import os
+
+    console.print(Panel(f"Codebase Cortex Quick Setup — {cwd.name}", style="bold blue"))
+    cortex_dir = cwd / CORTEX_DIR_NAME
+    cortex_dir.mkdir(exist_ok=True)
+
+    env_lines = [
+        "DOC_OUTPUT=local",
+        "DOC_DETAIL_LEVEL=standard",
+        "DOC_STRATEGY=main-only",
+        "DOC_OUTPUT_MODE=apply",
+    ]
+
+    # Auto-detect API keys from environment
+    if os.getenv("GOOGLE_API_KEY"):
+        env_lines.append(f"GOOGLE_API_KEY={os.environ['GOOGLE_API_KEY']}")
+        env_lines.append("LLM_MODEL=google/gemini-2.5-flash-lite")
+        console.print("[green]Detected GOOGLE_API_KEY[/green]")
+    elif os.getenv("ANTHROPIC_API_KEY"):
+        env_lines.append(f"ANTHROPIC_API_KEY={os.environ['ANTHROPIC_API_KEY']}")
+        env_lines.append("LLM_MODEL=anthropic/claude-sonnet-4-20250514")
+        console.print("[green]Detected ANTHROPIC_API_KEY[/green]")
+    elif os.getenv("OPENROUTER_API_KEY"):
+        env_lines.append(f"OPENROUTER_API_KEY={os.environ['OPENROUTER_API_KEY']}")
+        env_lines.append("LLM_MODEL=openrouter/google/gemini-2.5-flash-lite")
+        console.print("[green]Detected OPENROUTER_API_KEY[/green]")
+    else:
+        console.print("[yellow]No API key found in environment.[/yellow]")
+        console.print("Set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY")
+        console.print("Then run [cyan]cortex init --quick[/cyan] again.")
+        return
+
+    (cortex_dir / ".env").write_text("\n".join(env_lines) + "\n")
+    (cortex_dir / ".gitignore").write_text("*\n")
+    _init_docs_directory(cwd)
+
+    # Add .cortex/ to .gitignore
+    repo_gitignore = cwd / ".gitignore"
+    if repo_gitignore.exists():
+        content = repo_gitignore.read_text()
+        if CORTEX_DIR_NAME not in content:
+            with open(repo_gitignore, "a") as f:
+                f.write(f"\n# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
+    else:
+        repo_gitignore.write_text(f"# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
+
+    console.print(f"[green]Initialized {cortex_dir}/[/green]")
+    console.print("[bold]Quick setup complete![/bold]")
+
+
+def _init_docs_directory(cwd: Path) -> None:
+    """Create docs/ directory with initial INDEX.md and .cortex-meta.json."""
+    import json
+
+    docs_dir = cwd / "docs"
+    docs_dir.mkdir(exist_ok=True)
+
+    index_path = docs_dir / "INDEX.md"
+    if not index_path.exists():
+        index_path.write_text(
+            f"# {cwd.name} Documentation\n\n"
+            "<!-- cortex:toc -->\n"
+            "*No pages yet. Run `cortex run --once --full` to generate docs.*\n"
+            "<!-- /cortex:toc -->\n"
+        )
+
+    meta_path = docs_dir / ".cortex-meta.json"
+    if not meta_path.exists():
+        meta_path.write_text(json.dumps({"pages": {}, "run_metrics": {}}, indent=2))
+
+    console.print(f"[green]Created docs/ with INDEX.md[/green]")
+
+
+def _show_model_recommendation(llm_model: str, detail_level: str) -> None:
+    """Show model quality recommendation for selected detail level."""
+    model_lower = llm_model.lower()
+    is_small_local = any(size in model_lower for size in ["7b", "8b", "3b", "1b"])
+
+    if detail_level == "comprehensive" and is_small_local:
+        console.print(
+            f"\n[yellow]Note: Local small models may produce lower quality at "
+            f"'{detail_level}' level. Consider using a larger model or 'detailed'.[/yellow]"
+        )
+    elif detail_level == "detailed" and is_small_local:
+        console.print(
+            f"\n[yellow]Note: '{detail_level}' works best with 30B+ or cloud models.[/yellow]"
+        )
 
 
 CORTEX_HOOK_MARKER = "# --- codebase-cortex post-commit hook ---"
@@ -286,13 +403,14 @@ async def _bootstrap_pages(repo_path: Path) -> list[dict]:
 @cli.command()
 @click.option("--once", is_flag=True, help="Run once and exit (no watch mode).")
 @click.option("--watch", is_flag=True, help="Watch for changes and run continuously.")
-@click.option("--dry-run", is_flag=True, help="Analyze without writing to Notion.")
+@click.option("--dry-run", is_flag=True, help="Analyze without writing.")
 @click.option("--full", is_flag=True, help="Analyze entire codebase (not just recent diff).")
+@click.option("--detail", type=click.Choice(["standard", "detailed", "comprehensive"]), default=None, help="Override detail level for this run.")
+@click.option("--propose", is_flag=True, help="Stage changes for review instead of applying.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging (LLM calls, MCP calls).")
-def run(once: bool, watch: bool, dry_run: bool, full: bool, verbose: bool) -> None:
+def run(once: bool, watch: bool, dry_run: bool, full: bool, detail: str | None, propose: bool, verbose: bool) -> None:
     """Run the Cortex pipeline on the current repo."""
     from codebase_cortex.graph import compile_graph
-    from codebase_cortex.notion.page_cache import PageCache
     from codebase_cortex.utils.logging import setup_logging, get_logger
 
     if verbose:
@@ -307,44 +425,51 @@ def run(once: bool, watch: bool, dry_run: bool, full: bool, verbose: bool) -> No
     if not once and not watch:
         once = True  # Default to single run
 
-    # Auto-detect: if doc pages have no real content yet, do a full scan
+    # Override settings per-run
+    if detail:
+        settings.doc_detail_level = detail
+    if propose:
+        settings.doc_output_mode = "propose"
+    if dry_run:
+        settings.doc_output_mode = "dry-run"
+
+    # Auto-detect first run: check if docs/ is empty
     if not full:
-        cache = PageCache(cache_path=settings.page_cache_path)
-        arch_page = cache.find_by_title("Architecture Overview")
-        if arch_page and arch_page.content_hash == "":
-            # Pages exist but were never written with real content
-            # Check if this looks like a first run after init
-            doc_pages = cache.find_all_doc_pages(parent_title=settings.repo_path.name)
-            all_empty = all(p.content_hash == "" for p in doc_pages)
-            if all_empty:
-                console.print("[cyan]First run detected — doing full codebase scan[/cyan]")
-                full = True
+        docs_dir = settings.repo_path / "docs"
+        if not docs_dir.exists() or not any(docs_dir.glob("*.md")):
+            console.print("[cyan]First run detected — doing full codebase scan[/cyan]")
+            full = True
 
     graph = compile_graph()
 
     initial_state = {
-        "trigger": "manual",
+        "trigger": "full_scan" if full else "manual",
         "repo_path": str(settings.repo_path),
         "dry_run": dry_run,
         "full_scan": full,
+        "detail_level": settings.doc_detail_level,
+        "output_mode": settings.doc_output_mode,
         "errors": [],
     }
 
     if full:
         console.print("[cyan]Full codebase analysis mode[/cyan]")
     if dry_run:
-        console.print("[yellow]Dry run mode — no Notion writes[/yellow]")
+        console.print("[yellow]Dry run mode — no writes[/yellow]")
+    if propose:
+        console.print("[cyan]Propose mode — changes staged for review[/cyan]")
 
     async def _run_once():
-        # Discover any new child pages under the parent (e.g. user-moved pages)
-        from codebase_cortex.notion.bootstrap import discover_child_pages
+        # Notion page discovery (only if using Notion backend)
+        if settings.doc_output == "notion":
+            from codebase_cortex.notion.bootstrap import discover_child_pages
 
-        try:
-            new_count = await discover_child_pages(settings)
-            if new_count:
-                console.print(f"[green]Discovered {new_count} new page(s) in Notion[/green]")
-        except Exception as e:
-            logger.warning(f"Page discovery failed: {e}")
+            try:
+                new_count = await discover_child_pages(settings)
+                if new_count:
+                    console.print(f"[green]Discovered {new_count} new page(s) in Notion[/green]")
+            except Exception as e:
+                logger.warning(f"Page discovery failed: {e}")
 
         result = await graph.ainvoke(initial_state)
         if result.get("errors"):
@@ -387,48 +512,79 @@ def run(once: bool, watch: bool, dry_run: bool, full: bool, verbose: bool) -> No
 @cli.command()
 def status() -> None:
     """Show connection status and workspace info."""
+    import json
+
     settings = Settings.from_env()
 
     console.print(Panel(f"Codebase Cortex Status — {settings.repo_path.name}", style="bold blue"))
 
-    # Check initialization
     if not settings.is_initialized:
         console.print(f"[red]Not initialized.[/red] Run 'cortex init' in this directory.")
         return
 
-    console.print(f"[green]Config:[/green] {settings.env_path}")
-    console.print(f"[green]LLM Provider:[/green] {settings.llm_provider}")
-    console.print(f"[green]Repo:[/green] {settings.repo_path}")
+    # Configuration
+    console.print(f"  [bold]Backend:[/bold]     {settings.doc_output}")
+    console.print(f"  [bold]Detail:[/bold]      {settings.doc_detail_level}")
+    console.print(f"  [bold]Strategy:[/bold]    {settings.doc_strategy}")
+    console.print(f"  [bold]Output mode:[/bold] {settings.doc_output_mode}")
+    console.print(f"  [bold]Model:[/bold]       {settings.llm_model}")
 
-    # Check Notion tokens
+    # Local docs stats
+    docs_dir = settings.repo_path / "docs"
+    if docs_dir.is_dir():
+        md_files = list(docs_dir.glob("*.md"))
+        console.print(f"  [bold]Docs:[/bold]        {len(md_files)} pages in docs/")
+
+        # Count sections from meta
+        meta_path = docs_dir / ".cortex-meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                total_sections = sum(
+                    len(p.get("sections", {}))
+                    for p in meta.get("pages", {}).values()
+                )
+                human_edits = sum(
+                    1 for p in meta.get("pages", {}).values()
+                    for _heading, sec in p.get("sections", {}).items()
+                    if sec.get("content_hash") and sec.get("cortex_hash")
+                    and sec["content_hash"] != sec["cortex_hash"]
+                )
+                console.print(f"               {total_sections} sections tracked")
+                if human_edits:
+                    console.print(f"  [yellow]Human edits:[/yellow] {human_edits} sections modified since last Cortex run")
+
+                # Run metrics
+                metrics = meta.get("run_metrics", {})
+                if metrics.get("last_run"):
+                    console.print(f"  [bold]Last run:[/bold]    {metrics['last_run']}")
+                if metrics.get("total_tokens"):
+                    console.print(f"    Tokens:    {metrics['total_tokens']:,}")
+            except (json.JSONDecodeError, KeyError):
+                pass
+    else:
+        console.print("  [yellow]Docs:[/yellow]        Not created. Run 'cortex run --once --full'")
+
+    # FAISS index
+    if settings.faiss_index_dir.exists():
+        console.print(f"  [green]Index:[/green]       {settings.faiss_index_dir}")
+    else:
+        console.print("  [yellow]Index:[/yellow]       Not built. Run 'cortex embed'")
+
+    # Notion status
     token_path = settings.notion_token_path
     if token_path.exists():
         from codebase_cortex.auth.token_store import load_tokens
 
         token_data = load_tokens(token_path)
         if token_data and not token_data.is_expired:
-            console.print("[green]Notion:[/green] Connected (token valid)")
+            console.print("  [green]Notion:[/green]      Connected (token valid)")
         elif token_data:
-            console.print("[yellow]Notion:[/yellow] Token expired (will auto-refresh)")
+            console.print("  [yellow]Notion:[/yellow]      Token expired (will auto-refresh)")
         else:
-            console.print("[red]Notion:[/red] Token file corrupt")
-    else:
-        console.print("[red]Notion:[/red] Not connected. Run 'cortex init'.")
-
-    # Check FAISS index
-    if settings.faiss_index_dir.exists():
-        console.print(f"[green]Index:[/green] {settings.faiss_index_dir}")
-    else:
-        console.print("[yellow]Index:[/yellow] Not built. Run 'cortex embed'.")
-
-    # Test MCP connection
-    if token_path.exists():
-        console.print("\nTesting Notion MCP connection...")
-        try:
-            asyncio.run(_test_mcp(settings))
-            console.print("[green]MCP:[/green] Connected to mcp.notion.com")
-        except Exception as e:
-            console.print(f"[red]MCP:[/red] {e}")
+            console.print("  [red]Notion:[/red]      Token file corrupt")
+    elif settings.doc_output == "notion":
+        console.print("  [red]Notion:[/red]      Not connected. Run 'cortex init'")
 
 
 async def _test_mcp(settings: Settings) -> None:
@@ -864,3 +1020,401 @@ async def _link_pages(settings: Settings, page_ids: list[str]) -> None:
                     console.print(f"[red]Failed to fetch page {clean_id}[/red]")
             except Exception as e:
                 console.print(f"[red]Error linking {clean_id}: {e}[/red]")
+
+
+# --- New v0.2 commands ---
+
+
+@cli.command()
+@click.argument("action", type=click.Choice(["set", "show"]))
+@click.argument("key", required=False)
+@click.argument("value", required=False)
+def config(action: str, key: str | None, value: str | None) -> None:
+    """View or modify configuration.
+
+    Examples:
+        cortex config show
+        cortex config set DOC_DETAIL_LEVEL comprehensive
+        cortex config set LLM_MODEL anthropic/claude-sonnet-4-20250514
+    """
+    settings = Settings.from_env()
+
+    if action == "show":
+        if not settings.is_initialized:
+            console.print("[red]Not initialized.[/red]")
+            return
+        content = settings.env_path.read_text()
+        console.print(Panel(content, title=str(settings.env_path), border_style="cyan"))
+        return
+
+    # action == "set"
+    if not key or value is None:
+        console.print("[red]Usage: cortex config set KEY VALUE[/red]")
+        return
+
+    if not settings.is_initialized:
+        console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
+        return
+
+    env_path = settings.env_path
+    content = env_path.read_text()
+    lines = content.splitlines()
+    key_upper = key.upper()
+
+    updated = False
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith(f"{key_upper}="):
+            new_lines.append(f"{key_upper}={value}")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        new_lines.append(f"{key_upper}={value}")
+
+    env_path.write_text("\n".join(new_lines) + "\n")
+    console.print(f"[green]Set {key_upper}={value}[/green]")
+
+
+@cli.command()
+def toc() -> None:
+    """Rebuild TOC markers, INDEX.md, and .cortex-meta.json."""
+    from codebase_cortex.agents.toc_generator import TOCGeneratorAgent
+
+    settings = Settings.from_env()
+    if not settings.is_initialized:
+        console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
+        return
+
+    agent = TOCGeneratorAgent(settings=settings)
+    result = asyncio.run(agent.run({
+        "repo_path": str(settings.repo_path),
+        "doc_updates": [],
+        "tasks_created": [],
+        "errors": [],
+    }))
+    console.print("[green]TOC rebuilt.[/green]")
+    if result.get("errors"):
+        for err in result["errors"]:
+            console.print(f"  [yellow]{err}[/yellow]")
+
+
+@cli.command()
+@click.option("--max-commits-behind", type=int, default=5, help="Staleness threshold.")
+def check(max_commits_behind: int) -> None:
+    """Check documentation freshness. Exit code 1 if stale (for CI)."""
+    import json
+    import subprocess
+    import sys
+
+    settings = Settings.from_env()
+    if not settings.is_initialized:
+        console.print("[red]Not initialized.[/red]")
+        sys.exit(1)
+
+    meta_path = settings.repo_path / "docs" / ".cortex-meta.json"
+    if not meta_path.exists():
+        console.print("[yellow]No .cortex-meta.json found. Run 'cortex run --once' first.[/yellow]")
+        sys.exit(1)
+
+    try:
+        meta = json.loads(meta_path.read_text())
+    except json.JSONDecodeError:
+        console.print("[red]Corrupt .cortex-meta.json[/red]")
+        sys.exit(1)
+
+    source_commit = meta.get("run_metrics", {}).get("source_commit", "")
+    if not source_commit:
+        console.print("[yellow]No source_commit recorded. Docs may be stale.[/yellow]")
+        sys.exit(1)
+
+    # Count commits since source_commit
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"{source_commit}..HEAD"],
+            capture_output=True, text=True, check=True,
+            cwd=str(settings.repo_path),
+        )
+        commits_behind = int(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        console.print("[yellow]Could not determine commit distance.[/yellow]")
+        sys.exit(1)
+
+    if commits_behind > max_commits_behind:
+        console.print(f"[red]Docs are {commits_behind} commits behind (threshold: {max_commits_behind})[/red]")
+        sys.exit(1)
+    elif commits_behind > 0:
+        console.print(f"[yellow]Docs are {commits_behind} commits behind (within threshold)[/yellow]")
+    else:
+        console.print("[green]Docs are up to date.[/green]")
+
+
+@cli.command()
+def accept() -> None:
+    """Remove draft banners from documentation pages."""
+    import re
+
+    settings = Settings.from_env()
+    docs_dir = settings.repo_path / "docs"
+    if not docs_dir.is_dir():
+        console.print("[yellow]No docs/ directory found.[/yellow]")
+        return
+
+    draft_pattern = re.compile(
+        r"> \*\*\[DRAFT\].*?Run `cortex accept`.*?\n\n",
+        re.DOTALL,
+    )
+
+    count = 0
+    for md_file in docs_dir.glob("*.md"):
+        content = md_file.read_text()
+        if "> **[DRAFT]" in content:
+            cleaned = draft_pattern.sub("", content)
+            if cleaned != content:
+                md_file.write_text(cleaned)
+                count += 1
+                console.print(f"  [green]Accepted:[/green] {md_file.name}")
+
+    if count == 0:
+        console.print("[green]No draft banners found.[/green]")
+    else:
+        console.print(f"\n[bold green]Accepted {count} page(s).[/bold green]")
+
+
+@cli.command()
+def diff() -> None:
+    """Preview proposed changes (propose mode)."""
+    import difflib
+
+    settings = Settings.from_env()
+    proposed_dir = settings.cortex_dir / "proposed"
+    docs_dir = settings.repo_path / "docs"
+
+    if not proposed_dir.is_dir() or not any(proposed_dir.iterdir()):
+        console.print("[yellow]No proposed changes. Run 'cortex run --propose' first.[/yellow]")
+        return
+
+    for proposed_file in sorted(proposed_dir.glob("*.md")):
+        current_file = docs_dir / proposed_file.name
+        current_content = current_file.read_text().splitlines() if current_file.exists() else []
+        proposed_content = proposed_file.read_text().splitlines()
+
+        diff_lines = list(difflib.unified_diff(
+            current_content, proposed_content,
+            fromfile=f"docs/{proposed_file.name}",
+            tofile=f"proposed/{proposed_file.name}",
+            lineterm="",
+        ))
+
+        if diff_lines:
+            colored = []
+            for line in diff_lines:
+                if line.startswith("+") and not line.startswith("+++"):
+                    colored.append(f"[green]{line}[/green]")
+                elif line.startswith("-") and not line.startswith("---"):
+                    colored.append(f"[red]{line}[/red]")
+                else:
+                    colored.append(line)
+            console.print(Panel("\n".join(colored), title=proposed_file.name, border_style="cyan"))
+        else:
+            console.print(f"  {proposed_file.name}: [dim]no changes[/dim]")
+
+
+@cli.command()
+def apply() -> None:
+    """Apply proposed changes from propose mode."""
+    import shutil
+
+    settings = Settings.from_env()
+    proposed_dir = settings.cortex_dir / "proposed"
+    docs_dir = settings.repo_path / "docs"
+
+    if not proposed_dir.is_dir() or not any(proposed_dir.iterdir()):
+        console.print("[yellow]No proposed changes to apply.[/yellow]")
+        return
+
+    docs_dir.mkdir(exist_ok=True)
+    count = 0
+    for proposed_file in sorted(proposed_dir.glob("*.md")):
+        shutil.copy2(proposed_file, docs_dir / proposed_file.name)
+        count += 1
+        console.print(f"  [green]Applied:[/green] {proposed_file.name}")
+
+    # Clean up proposed/
+    shutil.rmtree(proposed_dir)
+    console.print(f"\n[bold green]Applied {count} file(s).[/bold green]")
+
+
+@cli.command()
+def discard() -> None:
+    """Discard proposed changes without applying."""
+    import shutil
+
+    settings = Settings.from_env()
+    proposed_dir = settings.cortex_dir / "proposed"
+
+    if not proposed_dir.is_dir() or not any(proposed_dir.iterdir()):
+        console.print("[yellow]No proposed changes to discard.[/yellow]")
+        return
+
+    count = len(list(proposed_dir.glob("*.md")))
+    shutil.rmtree(proposed_dir)
+    console.print(f"[green]Discarded {count} proposed file(s).[/green]")
+
+
+@cli.command()
+def map() -> None:
+    """Generate a knowledge map from code embeddings."""
+    from codebase_cortex.embeddings.store import FAISSStore
+    from codebase_cortex.embeddings.clustering import TopicClusterer
+
+    settings = Settings.from_env()
+    store = FAISSStore(index_dir=settings.faiss_index_dir)
+
+    if not store.load():
+        console.print("[red]No FAISS index. Run 'cortex embed' first.[/red]")
+        return
+
+    if store.size == 0:
+        console.print("[yellow]Index is empty.[/yellow]")
+        return
+
+    # Re-compute embeddings from stored chunks for clustering
+    import numpy as np
+    import faiss
+
+    # Extract embeddings from the FAISS index
+    if hasattr(store.index, "reconstruct_n"):
+        embeddings = np.zeros((store.size, store.index.d), dtype=np.float32)
+        for i in range(store.size):
+            embeddings[i] = store.index.reconstruct(i)
+    else:
+        console.print("[yellow]Cannot extract embeddings from this index type.[/yellow]")
+        return
+
+    clusterer = TopicClusterer(min_cluster_size=3)
+    topics = clusterer.cluster(embeddings, store.chunks)
+    md = clusterer.to_markdown(topics)
+
+    # Write knowledge map
+    docs_dir = settings.repo_path / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    map_path = docs_dir / "knowledge-map.md"
+    map_path.write_text(md)
+    console.print(f"[green]Knowledge map written to {map_path}[/green]")
+    console.print(f"  {len(topics)} topic clusters found")
+
+
+@cli.command()
+def resolve() -> None:
+    """Resolve git conflict markers in documentation files."""
+    import re
+
+    settings = Settings.from_env()
+    docs_dir = settings.repo_path / "docs"
+
+    if not docs_dir.is_dir():
+        console.print("[yellow]No docs/ directory found.[/yellow]")
+        return
+
+    conflict_pattern = re.compile(
+        r"<<<<<<<.*?\n(.*?)=======\n(.*?)>>>>>>>.*?\n",
+        re.DOTALL,
+    )
+
+    count = 0
+    for md_file in docs_dir.glob("*.md"):
+        content = md_file.read_text()
+        if "<<<<<<< " in content:
+            # Keep the incoming (theirs) side of conflicts
+            resolved = conflict_pattern.sub(r"\2", content)
+            md_file.write_text(resolved)
+            count += 1
+            console.print(f"  [green]Resolved:[/green] {md_file.name}")
+
+    if count == 0:
+        console.print("[green]No conflict markers found.[/green]")
+    else:
+        console.print(f"\n[bold green]Resolved conflicts in {count} file(s).[/bold green]")
+        console.print("Run [cyan]cortex run --once[/cyan] to regenerate affected sections.")
+
+
+@cli.command()
+@click.option("--on-pr", is_flag=True, help="Post doc impact comment on PR.")
+@click.option("--on-merge", is_flag=True, help="Create doc update after merge.")
+@click.option("--auto-apply", is_flag=True, help="Auto-apply instead of proposing.")
+@click.option("--dry-run", is_flag=True, help="Preview only.")
+def ci(on_pr: bool, on_merge: bool, auto_apply: bool, dry_run: bool) -> None:
+    """CI/CD mode for automated documentation updates."""
+    import json
+    import os
+
+    settings = Settings.from_env()
+    if not settings.is_initialized:
+        console.print("[red]Not initialized.[/red]")
+        return
+
+    # Read CI environment
+    github_sha = os.getenv("GITHUB_SHA", "")
+    github_event = os.getenv("GITHUB_EVENT_NAME", "")
+
+    if on_pr:
+        settings.doc_output_mode = "dry-run"
+        console.print("[cyan]CI: PR impact analysis mode[/cyan]")
+    elif on_merge:
+        if auto_apply:
+            settings.doc_output_mode = "apply"
+        else:
+            settings.doc_output_mode = "propose"
+        console.print("[cyan]CI: Post-merge documentation update[/cyan]")
+
+    if dry_run:
+        settings.doc_output_mode = "dry-run"
+
+    from codebase_cortex.graph import compile_graph
+
+    graph = compile_graph()
+    initial_state = {
+        "trigger": "ci",
+        "repo_path": str(settings.repo_path),
+        "dry_run": settings.doc_output_mode == "dry-run",
+        "full_scan": False,
+        "detail_level": settings.doc_detail_level,
+        "output_mode": settings.doc_output_mode,
+        "errors": [],
+    }
+
+    result = asyncio.run(graph.ainvoke(initial_state))
+
+    # Output structured JSON for downstream CI steps
+    output = {
+        "analysis": result.get("analysis", ""),
+        "doc_updates": result.get("doc_updates", []),
+        "tasks_created": result.get("tasks_created", []),
+        "errors": result.get("errors", []),
+        "github_sha": github_sha,
+        "github_event": github_event,
+    }
+    console.print(json.dumps(output, indent=2))
+
+
+@cli.command()
+@click.option("--target", type=click.Choice(["notion"]), required=True, help="Sync target.")
+def sync(target: str) -> None:
+    """Sync local docs to a remote platform."""
+    settings = Settings.from_env()
+
+    if target == "notion":
+        if not settings.notion_token_path.exists():
+            console.print("[red]Notion not connected. Run 'cortex init' and connect Notion.[/red]")
+            return
+
+        docs_dir = settings.repo_path / "docs"
+        if not docs_dir.is_dir():
+            console.print("[yellow]No docs/ directory to sync.[/yellow]")
+            return
+
+        md_files = list(docs_dir.glob("*.md"))
+        console.print(f"Syncing {len(md_files)} page(s) to Notion...")
+        console.print("[yellow]Notion sync not yet fully implemented. Use 'cortex run' with DOC_OUTPUT=notion.[/yellow]")
