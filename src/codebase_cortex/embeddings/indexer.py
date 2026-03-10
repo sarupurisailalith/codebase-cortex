@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -24,7 +26,7 @@ CODE_EXTENSIONS = {
 SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__",
     ".pytest_cache", "dist", "build", ".eggs", ".tox",
-    ".mypy_cache", ".ruff_cache",
+    ".mypy_cache", ".ruff_cache", ".cortex",
 }
 
 # Max file size to index (100KB)
@@ -206,3 +208,86 @@ class EmbeddingIndexer:
     def _chunk_to_text(chunk: CodeChunk) -> str:
         """Convert a chunk to a text string suitable for embedding."""
         return f"{chunk.file_path} ({chunk.chunk_type}: {chunk.name})\n{chunk.content[:2000]}"
+
+    # --- Incremental indexing ---
+
+    def index_codebase_incremental(self, store: "FAISSStore") -> "IncrementalResult":
+        """Only re-embed changed files. Returns stats.
+
+        Compares file content hashes against a stored manifest to identify
+        added, modified, and removed files.
+        """
+        from codebase_cortex.embeddings.chunker import TreeSitterChunker
+
+        chunker = TreeSitterChunker()
+        current_hashes = self._compute_file_hashes()
+        previous_hashes = self._load_hash_manifest()
+
+        added = [p for p in current_hashes if p not in previous_hashes]
+        modified = [p for p in current_hashes if p in previous_hashes and current_hashes[p] != previous_hashes[p]]
+        removed = [p for p in previous_hashes if p not in current_hashes]
+
+        # Remove old chunks for modified + removed files
+        files_to_remove = modified + removed
+        if files_to_remove:
+            ids = store.get_chunk_ids_for_files(files_to_remove)
+            store.remove_ids(ids)
+
+        # Re-chunk and re-embed added + modified files
+        new_chunks: list[CodeChunk] = []
+        for rel_path in added + modified:
+            full_path = self.repo_path / rel_path
+            try:
+                content = full_path.read_text(encoding="utf-8", errors="ignore")
+                new_chunks.extend(chunker.chunk_file(Path(rel_path), content))
+            except (OSError, UnicodeDecodeError):
+                continue
+
+        if new_chunks:
+            embeddings = self.embed_chunks(new_chunks)
+            store.add(new_chunks, embeddings)
+
+        # Save updated manifest
+        self._save_hash_manifest(current_hashes)
+
+        return IncrementalResult(
+            files_added=len(added),
+            files_modified=len(modified),
+            files_removed=len(removed),
+            chunks_re_embedded=len(new_chunks),
+        )
+
+    def _compute_file_hashes(self) -> dict[str, str]:
+        """Compute MD5 hashes for all indexable files."""
+        hashes: dict[str, str] = {}
+        for file_path in self._iter_files():
+            try:
+                content = file_path.read_bytes()
+                rel_path = str(file_path.relative_to(self.repo_path))
+                hashes[rel_path] = hashlib.md5(content).hexdigest()
+            except OSError:
+                continue
+        return hashes
+
+    def _load_hash_manifest(self) -> dict[str, str]:
+        """Load file hashes from the manifest."""
+        manifest_path = self.repo_path / ".cortex" / "faiss_index" / "file_hashes.json"
+        if manifest_path.exists():
+            return json.loads(manifest_path.read_text())
+        return {}
+
+    def _save_hash_manifest(self, hashes: dict[str, str]) -> None:
+        """Save file hashes to the manifest."""
+        manifest_dir = self.repo_path / ".cortex" / "faiss_index"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        (manifest_dir / "file_hashes.json").write_text(json.dumps(hashes, indent=2))
+
+
+@dataclass
+class IncrementalResult:
+    """Result of an incremental index rebuild."""
+
+    files_added: int = 0
+    files_modified: int = 0
+    files_removed: int = 0
+    chunks_re_embedded: int = 0

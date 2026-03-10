@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from codebase_cortex.agents.base import BaseAgent
@@ -10,12 +11,15 @@ from codebase_cortex.embeddings.indexer import EmbeddingIndexer
 from codebase_cortex.embeddings.store import FAISSStore
 from codebase_cortex.state import CortexState, RelatedDoc
 
+logger = logging.getLogger("cortex")
+
 
 class SemanticFinderAgent(BaseAgent):
     """Finds semantically related code chunks using FAISS embeddings.
 
-    Embeds the analysis text from CodeAnalyzer, queries the FAISS index
-    for similar code chunks, and returns them as RelatedDoc entries.
+    Uses incremental indexing by default: only re-embeds files that changed
+    since the last run. Falls back to a full rebuild when no existing index
+    is found or when ``full_scan`` is requested.
     """
 
     async def run(self, state: CortexState) -> dict:
@@ -26,17 +30,32 @@ class SemanticFinderAgent(BaseAgent):
         repo_path = Path(state.get("repo_path", "."))
         settings = Settings.from_env(repo_path)
         index_dir = settings.faiss_index_dir
-        try:
-            # Always rebuild the index to capture new/changed files
-            indexer = EmbeddingIndexer(repo_path=repo_path)
-            chunks = indexer.collect_chunks()
-            if not chunks:
-                return {"related_docs": []}
+        full_scan = state.get("trigger") == "full_scan"
 
+        try:
+            indexer = EmbeddingIndexer(repo_path=repo_path)
             store = FAISSStore(index_dir=index_dir)
-            embeddings = indexer.embed_chunks(chunks)
-            store.build(embeddings, chunks)
+
+            # Try incremental rebuild unless full_scan requested
+            if not full_scan and store.load():
+                result = indexer.index_codebase_incremental(store)
+                logger.info(
+                    "Incremental index: +%d modified=%d removed=%d re-embedded=%d chunks",
+                    result.files_added, result.files_modified,
+                    result.files_removed, result.chunks_re_embedded,
+                )
+            else:
+                # Full rebuild
+                chunks = indexer.collect_chunks()
+                if not chunks:
+                    return {"related_docs": []}
+                embeddings = indexer.embed_chunks(chunks)
+                store.build(embeddings, chunks)
+
             store.save()
+
+            if store.size == 0:
+                return {"related_docs": []}
 
             query_emb = indexer.embed_texts([analysis])
             if query_emb.size == 0:

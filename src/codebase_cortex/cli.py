@@ -469,7 +469,8 @@ def analyze() -> None:
 
 
 @cli.command()
-def embed() -> None:
+@click.option("--incremental/--full", default=True, help="Incremental or full rebuild.")
+def embed(incremental: bool) -> None:
     """Rebuild the embedding index for the current repo."""
     from codebase_cortex.embeddings.indexer import EmbeddingIndexer
     from codebase_cortex.embeddings.store import FAISSStore
@@ -478,21 +479,31 @@ def embed() -> None:
     repo_path = settings.repo_path
     index_dir = settings.faiss_index_dir
 
-    console.print(f"Indexing [cyan]{repo_path}[/cyan]...")
-
     indexer = EmbeddingIndexer(repo_path=repo_path)
-    chunks = indexer.collect_chunks()
-    console.print(f"Found [green]{len(chunks)}[/green] code chunks")
-
-    if not chunks:
-        console.print("[yellow]No indexable files found.[/yellow]")
-        return
-
-    console.print("Generating embeddings...")
-    embeddings = indexer.embed_chunks(chunks)
-
     store = FAISSStore(index_dir=index_dir)
-    store.build(embeddings, chunks)
+
+    if incremental and store.load():
+        console.print(f"Incremental index update for [cyan]{repo_path}[/cyan]...")
+        result = indexer.index_codebase_incremental(store)
+        console.print(
+            f"  +{result.files_added} added, "
+            f"{result.files_modified} modified, "
+            f"{result.files_removed} removed, "
+            f"{result.chunks_re_embedded} chunks re-embedded"
+        )
+    else:
+        console.print(f"Full index rebuild for [cyan]{repo_path}[/cyan]...")
+        chunks = indexer.collect_chunks()
+        console.print(f"Found [green]{len(chunks)}[/green] code chunks")
+
+        if not chunks:
+            console.print("[yellow]No indexable files found.[/yellow]")
+            return
+
+        console.print("Generating embeddings...")
+        embeddings = indexer.embed_chunks(chunks)
+        store.build(embeddings, chunks)
+
     store.save()
     console.print(f"Saved FAISS index with [green]{store.size}[/green] vectors to {index_dir}")
 

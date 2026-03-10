@@ -59,6 +59,12 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.optional-dependencies]
+tree-sitter = [
+    "tree-sitter>=0.22",
+    "tree-sitter-languages>=1.10",
+]
+
 [project.scripts]
 codebase-cortex = "codebase_cortex.cli:cli"
 cortex = "codebase_cortex.cli:cli"
