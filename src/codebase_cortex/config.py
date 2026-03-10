@@ -33,18 +33,17 @@ DEFAULT_MODELS: dict[str, str] = {
 
 RECOMMENDED_MODELS: dict[str, list[str]] = {
     "google": [
-        "gemini-2.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-2.5-pro",
+        "gemini/gemini-2.5-flash-lite",
+        "gemini/gemini-2.5-flash",
+        "gemini/gemini-2.5-pro",
     ],
     "anthropic": [
-        "claude-sonnet-4-20250514",
-        "claude-haiku-4-5-20251001",
+        "anthropic/claude-sonnet-4-20250514",
+        "anthropic/claude-haiku-4-5-20251001",
     ],
     "openrouter": [
-        "anthropic/claude-sonnet-4",
-        "google/gemini-2.5-flash-lite",
-        "google/gemini-3-flash-preview",
+        "openrouter/anthropic/claude-sonnet-4",
+        "openrouter/google/gemini-2.5-flash-lite",
     ],
 }
 
@@ -54,7 +53,7 @@ class Settings:
     """Application settings loaded from .cortex/.env in the target repo."""
 
     # v0.2 LLM config (LiteLLM provider/model format)
-    llm_model: str = "google/gemini-2.5-flash-lite"
+    llm_model: str = "gemini/gemini-2.5-flash-lite"
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_fallback: str | None = None
@@ -129,7 +128,7 @@ class Settings:
         elif llm_model_raw:
             llm_model = llm_model_raw
         else:
-            llm_model = "google/gemini-2.5-flash-lite"
+            llm_model = "gemini/gemini-2.5-flash-lite"
 
         return cls(
             llm_model=llm_model,

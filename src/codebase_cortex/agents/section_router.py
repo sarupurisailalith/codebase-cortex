@@ -42,6 +42,7 @@ class SectionRouterAgent(BaseAgent):
             return {"targeted_sections": []}
 
         settings = self.settings
+        full_scan = state.get("full_scan", False)
         backend = get_backend(settings)
 
         # Get page list with section trees
@@ -83,7 +84,20 @@ class SectionRouterAgent(BaseAgent):
             for doc in related_docs[:5]:
                 related_summary += f"- {doc.get('title', 'unknown')} (similarity: {doc.get('similarity', 0):.2f})\n"
 
+        full_scan_instruction = ""
+        if full_scan:
+            full_scan_instruction = """
+IMPORTANT: This is a FULL SCAN (initial documentation generation). The codebase has little or no
+documentation yet. You should suggest creating comprehensive documentation pages for ALL major
+components. Use {"action": "create_page"} for each new page. Create pages for:
+- Architecture/overview documentation
+- API documentation (if the project has APIs)
+- Data models documentation
+- Key subsystem documentation
+Do NOT log these as tasks — create the pages now."""
+
         prompt = f"""Review this code analysis and identify which documentation sections need updating.
+{full_scan_instruction}
 
 ## Code Analysis
 {analysis}

@@ -115,7 +115,7 @@ def init(quick: bool) -> None:
     # LiteLLM reads provider-specific env vars automatically (GOOGLE_API_KEY, etc.)
     # We also store as LLM_API_KEY for explicit passthrough
     provider = llm_model.split("/")[0] if "/" in llm_model else ""
-    provider_key_map = {"google": "GOOGLE_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+    provider_key_map = {"gemini": "GEMINI_API_KEY", "google": "GOOGLE_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
     provider_key_name = provider_key_map.get(provider, "")
 
     env_lines = [

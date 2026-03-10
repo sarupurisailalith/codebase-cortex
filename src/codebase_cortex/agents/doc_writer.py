@@ -27,14 +27,23 @@ DETAIL_LEVEL_INSTRUCTIONS = {
 }
 
 
-def _build_system_prompt(detail_level: str = "standard") -> str:
+def _build_system_prompt(detail_level: str = "standard", existing_pages: list[str] | None = None) -> str:
     detail_instructions = DETAIL_LEVEL_INSTRUCTIONS.get(detail_level, DETAIL_LEVEL_INSTRUCTIONS["standard"])
+
+    pages_note = ""
+    if existing_pages:
+        pages_list = ", ".join(existing_pages)
+        pages_note = f"""
+IMPORTANT: The only documentation pages that currently exist are: {pages_list}
+Do NOT reference or link to pages that do not exist. If you want to mention a topic
+that doesn't have its own page yet, describe it inline instead of linking to a non-existent file."""
 
     return f"""You are a technical documentation writer. Generate documentation content
 for the specified sections based on code analysis.
 
 Detail level: {detail_level}
 {detail_instructions}
+{pages_note}
 
 When updating an existing section:
 - Preserve the section's heading level and format
@@ -74,6 +83,12 @@ class DocWriterAgent(BaseAgent):
 
         backend = self.backend or get_backend(self.settings)
 
+        # Get existing page list so LLM doesn't hallucinate links
+        try:
+            existing_pages = [p.get("path", p.get("title", "")) for p in await backend.fetch_page_list()]
+        except Exception:
+            existing_pages = []
+
         related_docs = state.get("related_docs", [])
         related_context = ""
         if related_docs:
@@ -112,7 +127,7 @@ Generate the full page content in markdown."""
 
             try:
                 messages = [
-                    {"role": "system", "content": _build_system_prompt(detail_level)},
+                    {"role": "system", "content": _build_system_prompt(detail_level, existing_pages)},
                     {"role": "user", "content": prompt},
                 ]
                 content = await self._invoke_llm(messages, node_name="doc_writer")
@@ -143,6 +158,9 @@ Generate the full page content in markdown."""
         by_page: dict[str, list[dict]] = defaultdict(list)
         for section in update_sections:
             page = section.get("page", "")
+            # Sanitize: LLM may return "docs/file.md" — strip leading docs/ prefix
+            if page.startswith("docs/"):
+                page = page[5:]
             if page:
                 by_page[page].append(section)
 
@@ -193,7 +211,7 @@ Output ONLY the section body content (not the heading)."""
 
                 try:
                     messages = [
-                        {"role": "system", "content": _build_system_prompt(detail_level)},
+                        {"role": "system", "content": _build_system_prompt(detail_level, existing_pages)},
                         {"role": "user", "content": section_prompt},
                     ]
                     new_content = await self._invoke_llm(messages, node_name="doc_writer")

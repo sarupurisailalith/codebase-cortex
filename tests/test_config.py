@@ -32,7 +32,7 @@ def clean_env(monkeypatch):
 
 def test_settings_defaults():
     s = Settings()
-    assert s.llm_model == "google/gemini-2.5-flash-lite"
+    assert s.llm_model == "gemini/gemini-2.5-flash-lite"
     assert s.llm_api_base is None
     assert s.llm_api_key is None
     assert s.llm_fallback is None
