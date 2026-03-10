@@ -84,9 +84,7 @@ async def test_code_analyzer_empty_diff(tmp_path):
 
 @pytest.mark.asyncio
 async def test_doc_writer_generates_updates():
-    response = json.dumps([
-        {"title": "Architecture Overview", "content": "# Updated arch", "action": "update"},
-    ])
+    response = "Updated content for the overview section."
     with _patch_litellm(response):
         agent = DocWriterAgent(_make_mock_settings())
 
@@ -94,13 +92,16 @@ async def test_doc_writer_generates_updates():
             "analysis": "New auth module added",
             "related_docs": [],
             "dry_run": True,
+            "targeted_sections": [
+                {"page": "architecture.md", "section": "## Overview", "reason": "Auth changed", "priority": "high"},
+            ],
             "errors": [],
         }
 
         result = await agent.run(state)
         assert len(result["doc_updates"]) == 1
-        assert result["doc_updates"][0]["title"] == "Architecture Overview"
         assert result["doc_updates"][0]["action"] == "update"
+        assert "architecture.md" in result["doc_updates"][0]["page_path"]
 
 
 @pytest.mark.asyncio

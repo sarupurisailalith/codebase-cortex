@@ -1,11 +1,11 @@
-"""SprintReporter agent — generates weekly sprint summaries in Notion."""
+"""SprintReporter agent — generates sprint summaries via DocBackend."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 from codebase_cortex.agents.base import BaseAgent
-from codebase_cortex.notion.bootstrap import extract_page_id
+from codebase_cortex.backends import get_backend
 from codebase_cortex.state import CortexState
 
 SYSTEM_PROMPT = """You are a technical project manager writing a sprint summary.
@@ -22,7 +22,7 @@ Keep it professional and concise. Use markdown formatting."""
 
 
 class SprintReporterAgent(BaseAgent):
-    """Generates sprint summary reports in Notion."""
+    """Generates sprint summary reports via DocBackend."""
 
     async def run(self, state: CortexState) -> dict:
         analysis = state.get("analysis", "")
@@ -30,9 +30,12 @@ class SprintReporterAgent(BaseAgent):
             return {"sprint_summary": ""}
 
         changed_files = state.get("changed_files", [])
-        doc_updates = state.get("doc_updates", [])
+        doc_updates = state.get("validated_updates", state.get("doc_updates", []))
         tasks_created = state.get("tasks_created", [])
+        run_metrics = state.get("run_metrics", {})
         dry_run = state.get("dry_run", False)
+
+        backend = self.backend or get_backend(self.settings)
 
         now = datetime.now()
         week_start = now - timedelta(days=now.weekday())
@@ -67,72 +70,19 @@ Write a complete sprint report in markdown."""
                 "errors": self._append_error(state, f"Sprint report failed: {e}"),
             }
 
-        # Write to Notion Sprint Log page
+        # Append Cortex usage metrics section
+        if run_metrics:
+            metrics_section = self._format_metrics(run_metrics)
+            sprint_summary += f"\n\n{metrics_section}"
+
+        # Write via backend
         if not dry_run and sprint_summary:
-            await self._write_to_notion(sprint_summary, week_start, state)
+            try:
+                await backend.append_to_log("sprint-log.md", sprint_summary)
+            except Exception as e:
+                self._logger.warning(f"Failed to write sprint report: {e}")
 
         return {"sprint_summary": sprint_summary}
-
-    async def _write_to_notion(
-        self, summary: str, week_start: datetime, state: CortexState
-    ) -> None:
-        """Append sprint summary to the Sprint Log page in Notion."""
-        from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
-        from codebase_cortex.config import Settings
-        from codebase_cortex.notion.page_cache import PageCache
-        from codebase_cortex.utils.logging import get_logger
-
-        logger = get_logger()
-        settings = Settings.from_env()
-        cache = PageCache(cache_path=settings.page_cache_path)
-
-        sprint_page = cache.find_by_title("Sprint Log")
-        parent_page = cache.find_by_title(settings.repo_path.name)
-        parent_id = (sprint_page or parent_page)
-        parent_id = parent_id.page_id if parent_id else None
-
-        try:
-            async with notion_mcp_session(settings) as session:
-                await rate_limiter.acquire()
-
-                week_label = week_start.strftime("%B %d, %Y")
-                content = f"# Sprint Report — Week of {week_label}\n\n{summary}"
-
-                if sprint_page:
-                    # Replace Sprint Log content with latest report
-                    await session.call_tool(
-                        "notion-update-page",
-                        arguments={
-                            "page_id": sprint_page.page_id,
-                            "command": "replace_content",
-                            "new_str": content,
-                        },
-                    )
-                    logger.info(f"Updated Sprint Log for week of {week_label}")
-                else:
-                    # Create new sprint report page
-                    create_args: dict = {
-                        "pages": [
-                            {
-                                "properties": {"title": f"📋 Sprint Report — {week_label}"},
-                                "content": content,
-                            }
-                        ],
-                    }
-                    if parent_id:
-                        create_args["parent"] = {"page_id": parent_id}
-
-                    result = await session.call_tool(
-                        "notion-create-pages",
-                        arguments=create_args,
-                    )
-                    page_id = extract_page_id(result)
-                    if page_id:
-                        cache.upsert(page_id, "Sprint Log")
-                    logger.info(f"Created Sprint Report for week of {week_label}")
-
-        except Exception as e:
-            logger.error(f"Failed to write sprint report: {e}")
 
     @staticmethod
     def _format_doc_updates(updates: list[dict]) -> str:
@@ -146,4 +96,22 @@ Write a complete sprint report in markdown."""
             return "No new tasks created."
         return "\n".join(
             f"- [{t.get('priority', 'medium')}] {t.get('title', 'Untitled')}" for t in tasks
+        )
+
+    @staticmethod
+    def _format_metrics(metrics: dict) -> str:
+        tokens_in = metrics.get("total_input_tokens", 0)
+        tokens_out = metrics.get("total_output_tokens", 0)
+        total = tokens_in + tokens_out
+        cost = metrics.get("estimated_cost_usd", 0)
+        wall_clock = metrics.get("wall_clock_seconds", 0)
+        sections_updated = metrics.get("sections_updated", 0)
+        sections_analyzed = metrics.get("sections_analyzed", 0)
+
+        return (
+            "## Cortex Usage\n"
+            f"- **Tokens:** {tokens_in:,} input + {tokens_out:,} output = {total:,} total\n"
+            f"- **Estimated Cost:** ~${cost:.4f}\n"
+            f"- **Pipeline Time:** {wall_clock:.1f}s\n"
+            f"- **Sections:** {sections_updated} updated, {sections_analyzed} analyzed"
         )

@@ -21,9 +21,11 @@ class BaseAgent(ABC):
     def __init__(
         self,
         settings: Settings,
+        backend: "DocBackend | None" = None,
         metrics: RunMetrics | None = None,
     ) -> None:
         self.settings = settings
+        self.backend = backend
         self.metrics = metrics
         self._logger = logging.getLogger("cortex")
 

@@ -24,7 +24,7 @@ Phases are implemented **sequentially** (01 through 08). For each phase:
 - [x] Phase 1: Core Infrastructure & LLM Layer (`ref/plans/01-core-infrastructure.md`)
 - [x] Phase 2: DocBackend Protocol & Local Docs (`ref/plans/02-docbackend-local-docs.md`)
 - [x] Phase 3: New Pipeline Nodes & Graph (`ref/plans/03-pipeline-nodes.md`)
-- [ ] Phase 4: Agent Refactoring (`ref/plans/04-agent-refactoring.md`)
+- [x] Phase 4: Agent Refactoring (`ref/plans/04-agent-refactoring.md`)
 - [ ] Phase 5: Embeddings Upgrades (`ref/plans/05-embeddings-upgrades.md`)
 - [ ] Phase 6: CLI Overhaul (`ref/plans/06-cli-overhaul.md`)
 - [ ] Phase 7: CI/CD & Advanced Features (`ref/plans/07-cicd-branch-advanced.md`)

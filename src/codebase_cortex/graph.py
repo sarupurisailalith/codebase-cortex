@@ -40,8 +40,10 @@ async def section_router_node(state: CortexState) -> dict:
 async def doc_writer_node(state: CortexState) -> dict:
     """Write or update documentation pages."""
     from codebase_cortex.agents.doc_writer import DocWriterAgent
+    from codebase_cortex.backends import get_backend
 
-    agent = DocWriterAgent(Settings.from_env())
+    settings = Settings.from_env()
+    agent = DocWriterAgent(settings, backend=get_backend(settings))
     return await agent.run(state)
 
 
@@ -64,16 +66,20 @@ async def toc_generator_node(state: CortexState) -> dict:
 async def task_creator_node(state: CortexState) -> dict:
     """Create tasks for undocumented areas."""
     from codebase_cortex.agents.task_creator import TaskCreatorAgent
+    from codebase_cortex.backends import get_backend
 
-    agent = TaskCreatorAgent(Settings.from_env())
+    settings = Settings.from_env()
+    agent = TaskCreatorAgent(settings, backend=get_backend(settings))
     return await agent.run(state)
 
 
 async def sprint_reporter_node(state: CortexState) -> dict:
     """Generate sprint summary report."""
     from codebase_cortex.agents.sprint_reporter import SprintReporterAgent
+    from codebase_cortex.backends import get_backend
 
-    agent = SprintReporterAgent(Settings.from_env())
+    settings = Settings.from_env()
+    agent = SprintReporterAgent(settings, backend=get_backend(settings))
     return await agent.run(state)
 
 
