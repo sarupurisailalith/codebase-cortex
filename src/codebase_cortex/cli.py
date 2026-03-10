@@ -16,6 +16,57 @@ from codebase_cortex.config import Settings, CORTEX_DIR_NAME
 console = Console()
 
 
+# ---------------------------------------------------------------------------
+# Service connection helpers — standard pattern for OAuth-based integrations
+# ---------------------------------------------------------------------------
+# Each service (Notion, Confluence, etc.) follows the same pattern:
+#   1. Check if tokens exist → if yes, already connected
+#   2. If not, run interactive OAuth flow
+#   3. Both `cortex init` and `cortex sync` use this helper
+#
+# To add a new service:
+#   1. Add a _connect_<service>(settings) function
+#   2. Add the service to SERVICE_CONNECTORS
+#   3. Add it as a choice in `cortex sync --target`
+
+
+def _connect_notion(settings: Settings) -> bool:
+    """Connect to Notion via OAuth. Returns True if connected."""
+    if settings.notion_token_path.exists():
+        console.print("[green]Notion already connected.[/green]")
+        return True
+
+    console.print("[bold]Connecting to Notion...[/bold]")
+    console.print("A browser window will open for Notion authorization.\n")
+    try:
+        asyncio.run(_run_oauth(settings.repo_path))
+        console.print("[green]Notion connected![/green]")
+        return True
+    except Exception as e:
+        console.print(f"[red]Notion OAuth failed: {e}[/red]")
+        console.print("You can retry later with: [cyan]cortex sync --target notion[/cyan]")
+        return False
+
+
+SERVICE_CONNECTORS: dict[str, callable] = {
+    "notion": _connect_notion,
+    # Future: "confluence": _connect_confluence,
+}
+
+
+def _ensure_service_connected(settings: Settings, service: str) -> bool:
+    """Ensure a service is connected, running OAuth if needed.
+
+    This is the standard entry point for service auth. Both `init` and
+    `sync` call this — so there's one path for each integration.
+    """
+    connector = SERVICE_CONNECTORS.get(service)
+    if not connector:
+        console.print(f"[red]Unknown service: {service}[/red]")
+        return False
+    return connector(settings)
+
+
 @click.group()
 @click.version_option(package_name="codebase-cortex")
 def cli() -> None:
@@ -167,21 +218,11 @@ def init(quick: bool) -> None:
     else:
         console.print("[yellow]Not a git repo — skipping git hook setup.[/yellow]")
 
-    # Step 6: Notion (optional)
+    # Step 6: Remote sync (optional)
+    settings = Settings.from_env(cwd)
     if doc_output == "notion" or click.confirm("Sync to Notion? (optional)", default=False):
-        console.print("\n[bold]Connecting to Notion...[/bold]")
-        console.print("A browser window will open for Notion authorization.")
-
-        notion_connected = False
-        try:
-            asyncio.run(_run_oauth(cwd))
-            console.print("[green]Notion connected successfully![/green]")
-            notion_connected = True
-        except Exception as e:
-            console.print(f"[yellow]Notion OAuth skipped: {e}[/yellow]")
-            console.print("You can retry later with: cortex init")
-
-        if notion_connected:
+        console.print()
+        if _ensure_service_connected(settings, "notion"):
             console.print("\n[bold]Setting up Notion workspace...[/bold]")
             try:
                 pages = asyncio.run(_bootstrap_pages(cwd))
@@ -215,16 +256,22 @@ def _init_quick(cwd: Path) -> None:
     ]
 
     # Auto-detect API keys from environment
-    if os.getenv("GOOGLE_API_KEY"):
-        env_lines.append(f"GOOGLE_API_KEY={os.environ['GOOGLE_API_KEY']}")
-        env_lines.append("LLM_MODEL=google/gemini-2.5-flash-lite")
-        console.print("[green]Detected GOOGLE_API_KEY[/green]")
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        env_lines.append(f"LLM_API_KEY={api_key}")
+        env_lines.append(f"GEMINI_API_KEY={api_key}")
+        env_lines.append("LLM_MODEL=gemini/gemini-2.5-flash-lite")
+        console.print("[green]Detected Google/Gemini API key[/green]")
     elif os.getenv("ANTHROPIC_API_KEY"):
-        env_lines.append(f"ANTHROPIC_API_KEY={os.environ['ANTHROPIC_API_KEY']}")
+        api_key = os.environ["ANTHROPIC_API_KEY"]
+        env_lines.append(f"LLM_API_KEY={api_key}")
+        env_lines.append(f"ANTHROPIC_API_KEY={api_key}")
         env_lines.append("LLM_MODEL=anthropic/claude-sonnet-4-20250514")
         console.print("[green]Detected ANTHROPIC_API_KEY[/green]")
     elif os.getenv("OPENROUTER_API_KEY"):
-        env_lines.append(f"OPENROUTER_API_KEY={os.environ['OPENROUTER_API_KEY']}")
+        api_key = os.environ["OPENROUTER_API_KEY"]
+        env_lines.append(f"LLM_API_KEY={api_key}")
+        env_lines.append(f"OPENROUTER_API_KEY={api_key}")
         env_lines.append("LLM_MODEL=openrouter/google/gemini-2.5-flash-lite")
         console.print("[green]Detected OPENROUTER_API_KEY[/green]")
     else:
@@ -436,7 +483,11 @@ def run(once: bool, watch: bool, dry_run: bool, full: bool, detail: str | None, 
     # Auto-detect first run: check if docs/ is empty
     if not full:
         docs_dir = settings.repo_path / "docs"
-        if not docs_dir.exists() or not any(docs_dir.glob("*.md")):
+        user_pages = [
+            f for f in (docs_dir.glob("*.md") if docs_dir.exists() else [])
+            if f.name not in ("INDEX.md",)
+        ]
+        if not docs_dir.exists() or not any(user_pages):
             console.print("[cyan]First run detected — doing full codebase scan[/cyan]")
             full = True
 
@@ -541,7 +592,7 @@ def status() -> None:
             try:
                 meta = json.loads(meta_path.read_text())
                 total_sections = sum(
-                    len(p.get("sections", {}))
+                    len(p.get("sections", []))
                     for p in meta.get("pages", {}).values()
                 )
                 human_edits = sum(
@@ -610,11 +661,12 @@ def analyze() -> None:
         console.print("[yellow]No recent changes found.[/yellow]")
         return
 
-    agent = CodeAnalyzerAgent(get_llm(settings))
+    agent = CodeAnalyzerAgent(settings)
     state = {
         "trigger": "manual",
         "repo_path": str(settings.repo_path),
         "diff_text": diff_text,
+        "detail_level": settings.doc_detail_level,
         "dry_run": True,
         "errors": [],
     }
@@ -783,7 +835,7 @@ async def _run_prompt(
     dry_run: bool,
 ) -> None:
     """Execute a user-directed prompt against specific Notion pages."""
-    from codebase_cortex.agents.doc_writer import strip_notion_metadata
+    from codebase_cortex.backends.notion_backend import strip_notion_metadata
     from codebase_cortex.config import get_llm
     from codebase_cortex.mcp_client import notion_mcp_session, rate_limiter
     from codebase_cortex.notion.page_cache import PageCache
@@ -1124,7 +1176,7 @@ def check(max_commits_behind: int) -> None:
         console.print("[red]Corrupt .cortex-meta.json[/red]")
         sys.exit(1)
 
-    source_commit = meta.get("run_metrics", {}).get("source_commit", "")
+    source_commit = meta.get("last_run", {}).get("source_commit", "")
     if not source_commit:
         console.print("[yellow]No source_commit recorded. Docs may be stale.[/yellow]")
         sys.exit(1)
@@ -1162,19 +1214,28 @@ def accept() -> None:
         return
 
     draft_pattern = re.compile(
-        r"> \*\*\[DRAFT\].*?Run `cortex accept`.*?\n\n",
-        re.DOTALL,
+        r"> .+(?:Draft|DRAFT).+Codebase Cortex.+\n(?:> .+\n)*> .+cortex accept.+\n\n",
     )
+
+    # Load meta index to update hashes after banner removal
+    from codebase_cortex.backends.local_markdown import LocalMarkdownBackend
+
+    backend = LocalMarkdownBackend(settings)
 
     count = 0
     for md_file in docs_dir.glob("*.md"):
         content = md_file.read_text()
-        if "> **[DRAFT]" in content:
+        if "cortex accept" in content:
             cleaned = draft_pattern.sub("", content)
             if cleaned != content:
                 md_file.write_text(cleaned)
+                # Update meta hashes so sections aren't marked as human-edited
+                backend._update_sections_meta(md_file.name, cleaned, cortex_written=True)
                 count += 1
                 console.print(f"  [green]Accepted:[/green] {md_file.name}")
+
+    if count > 0:
+        backend.meta.save()
 
     if count == 0:
         console.print("[green]No draft banners found.[/green]")
@@ -1235,11 +1296,21 @@ def apply() -> None:
         return
 
     docs_dir.mkdir(exist_ok=True)
+
+    from codebase_cortex.backends.local_markdown import LocalMarkdownBackend
+    backend = LocalMarkdownBackend(settings)
+
     count = 0
     for proposed_file in sorted(proposed_dir.glob("*.md")):
         shutil.copy2(proposed_file, docs_dir / proposed_file.name)
+        # Update meta hashes so sections aren't marked as human-edited
+        content = (docs_dir / proposed_file.name).read_text()
+        backend._update_sections_meta(proposed_file.name, content, cortex_written=True)
         count += 1
         console.print(f"  [green]Applied:[/green] {proposed_file.name}")
+
+    if count > 0:
+        backend.meta.save()
 
     # Clean up proposed/
     shutil.rmtree(proposed_dir)
@@ -1537,8 +1608,7 @@ def sync(target: str) -> None:
     settings = Settings.from_env()
 
     if target == "notion":
-        if not settings.notion_token_path.exists():
-            console.print("[red]Notion not connected. Run 'cortex init' and connect Notion.[/red]")
+        if not _ensure_service_connected(settings, "notion"):
             return
 
         docs_dir = settings.repo_path / "docs"
@@ -1546,6 +1616,112 @@ def sync(target: str) -> None:
             console.print("[yellow]No docs/ directory to sync.[/yellow]")
             return
 
-        md_files = list(docs_dir.glob("*.md"))
+        md_files = [f for f in docs_dir.glob("*.md") if f.name not in ("INDEX.md",)]
+        if not md_files:
+            console.print("[yellow]No documentation pages to sync.[/yellow]")
+            return
+
         console.print(f"Syncing {len(md_files)} page(s) to Notion...")
-        console.print("[yellow]Notion sync not yet fully implemented. Use 'cortex run' with DOC_OUTPUT=notion.[/yellow]")
+
+        async def _sync_to_notion():
+            from codebase_cortex.mcp_client import notion_mcp_session
+            from codebase_cortex.notion.bootstrap import (
+                extract_page_id,
+                search_page_by_title,
+            )
+            from codebase_cortex.notion.page_cache import PageCache
+            from codebase_cortex.utils.rate_limiter import NotionRateLimiter
+
+            rate_limiter = NotionRateLimiter()
+            cache = PageCache(cache_path=settings.page_cache_path)
+            repo_name = settings.repo_path.name
+
+            async with notion_mcp_session(settings) as session:
+                # Ensure parent page exists
+                parent_id = None
+                cached_parent = cache.find_by_title(repo_name)
+                if cached_parent:
+                    parent_id = cached_parent.page_id
+                    console.print(f"Using parent page: [bold]{repo_name}[/bold]")
+                else:
+                    parent_id = await search_page_by_title(session, repo_name)
+                    if parent_id:
+                        cache.upsert(parent_id, repo_name)
+                        console.print(f"Found parent page: [bold]{repo_name}[/bold]")
+                    else:
+                        await rate_limiter.acquire()
+                        result = await session.call_tool(
+                            "notion-create-pages",
+                            arguments={
+                                "pages": [{
+                                    "properties": {"title": repo_name},
+                                    "content": (
+                                        f"# {repo_name}\n\n"
+                                        f"Documentation hub for **{repo_name}**.\n\n"
+                                        "Managed by [Codebase Cortex](https://github.com/sarupurisailalith/codebase-cortex)."
+                                    ),
+                                }],
+                            },
+                        )
+                        parent_id = extract_page_id(result)
+                        if parent_id:
+                            cache.upsert(parent_id, repo_name)
+                            console.print(f"Created parent page: [bold]{repo_name}[/bold]")
+                        else:
+                            console.print("[red]Failed to create parent page[/red]")
+                            return 0
+
+                # Sync each doc as a child page
+                synced = 0
+                for md_file in md_files:
+                    title = None
+                    content = md_file.read_text()
+
+                    for line in content.split("\n"):
+                        if line.startswith("# "):
+                            title = line[2:].strip()
+                            break
+                    title = title or md_file.stem.replace("-", " ").title()
+
+                    # Check if page already exists in cache
+                    existing = cache.find_by_title(title)
+                    try:
+                        await rate_limiter.acquire()
+                        if existing:
+                            # Update existing page
+                            await session.call_tool(
+                                "notion-update-page",
+                                arguments={
+                                    "page_id": existing.page_id,
+                                    "command": "replace_content",
+                                    "new_str": content,
+                                },
+                            )
+                            console.print(f"  [green]Updated:[/green] {title}")
+                        else:
+                            # Create new page under parent
+                            result = await session.call_tool(
+                                "notion-create-pages",
+                                arguments={
+                                    "parent": {"page_id": parent_id},
+                                    "pages": [{
+                                        "properties": {"title": title},
+                                        "content": content,
+                                    }],
+                                },
+                            )
+                            page_id = extract_page_id(result)
+                            if page_id:
+                                cache.upsert(page_id, title)
+                            console.print(f"  [green]Created:[/green] {title}")
+                        synced += 1
+                    except Exception as e:
+                        console.print(f"  [red]Failed:[/red] {title} — {e}")
+
+                return synced
+
+        try:
+            synced = asyncio.run(_sync_to_notion())
+            console.print(f"\n[bold green]Synced {synced} page(s) to Notion.[/bold green]")
+        except Exception as e:
+            console.print(f"[red]Sync failed: {e}[/red]")

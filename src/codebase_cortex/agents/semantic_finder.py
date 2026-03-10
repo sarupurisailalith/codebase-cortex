@@ -30,7 +30,7 @@ class SemanticFinderAgent(BaseAgent):
         repo_path = Path(state.get("repo_path", "."))
         settings = Settings.from_env(repo_path)
         index_dir = settings.faiss_index_dir
-        full_scan = state.get("trigger") == "full_scan"
+        full_scan = state.get("full_scan", False) or state.get("trigger") == "full_scan"
 
         try:
             indexer = EmbeddingIndexer(repo_path=repo_path)

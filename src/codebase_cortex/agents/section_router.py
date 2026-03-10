@@ -48,9 +48,12 @@ class SectionRouterAgent(BaseAgent):
         # Get page list with section trees
         pages = await backend.fetch_page_list()
 
-        if not pages:
-            # First run — no docs yet. Skip routing, let DocWriter handle full generation.
+        if not pages and not full_scan:
             return {"targeted_sections": []}
+
+        if not pages and full_scan:
+            # No docs yet but full scan — ask LLM to suggest initial pages
+            pages = []  # Continue to prompt with empty section map
 
         # Build section heading map for the LLM
         # Check human-edited status via MetaIndex

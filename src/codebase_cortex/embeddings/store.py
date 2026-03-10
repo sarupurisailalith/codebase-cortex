@@ -159,7 +159,7 @@ class FAISSStore:
                 "file_path": c.file_path,
                 "chunk_type": c.chunk_type,
                 "name": c.name,
-                "content": c.content[:500],  # Truncate for storage
+                "content": c.content[:2000],  # Truncate for storage
                 "start_line": c.start_line,
                 "end_line": c.end_line,
             }
