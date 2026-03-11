@@ -1,5 +1,10 @@
 # Codebase Cortex
 
+[![PyPI version](https://img.shields.io/pypi/v/codebase-cortex)](https://pypi.org/project/codebase-cortex/)
+[![Python 3.11+](https://img.shields.io/pypi/pyversions/codebase-cortex)](https://pypi.org/project/codebase-cortex/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/codebase-cortex)](https://pypi.org/project/codebase-cortex/)
+
 **Automatically keep your engineering documentation in sync with code.**
 
 Codebase Cortex is a local-first, multi-agent documentation engine that watches your codebase for changes and updates markdown documentation automatically. It uses LangGraph to orchestrate nine pipeline nodes that analyze code, route updates to specific sections, write docs, validate accuracy, generate indexes, create tasks, and produce sprint reports. Docs live as plain markdown files in your repo — no cloud dependency required. Optional sync to Notion is available via the DocBackend protocol.
