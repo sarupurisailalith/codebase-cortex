@@ -47,7 +47,11 @@ class OutputRouterAgent:
         elif output_mode == "propose":
             return self._propose(updates, tasks, settings, state)
         else:
-            return self._apply(updates, tasks, sprint, state)
+            result = self._apply(updates, tasks, sprint, state)
+            # Auto-sync to remote platforms if configured
+            if settings.doc_auto_sync and settings.doc_sync_targets and updates:
+                self._auto_sync(settings)
+            return result
 
     @staticmethod
     def _get_current_branch(repo_path: Path) -> str | None:
@@ -121,6 +125,24 @@ class OutputRouterAgent:
         )
         logger.info(summary)
         return {"output_summary": summary}
+
+    @staticmethod
+    def _auto_sync(settings: Settings) -> None:
+        """Trigger sync to configured remote targets. Non-blocking — failures are logged, not raised."""
+        import asyncio
+
+        targets = [t.strip() for t in settings.doc_sync_targets.split(",") if t.strip()]
+        for target in targets:
+            if target == "notion":
+                logger.info("Auto-syncing to Notion...")
+                try:
+                    from codebase_cortex.cli import _run_sync_to_notion
+                    synced = asyncio.run(_run_sync_to_notion(settings))
+                    logger.info("Auto-sync to Notion completed: %d page(s).", synced)
+                except Exception as e:
+                    logger.warning("Auto-sync to Notion failed: %s", e)
+            else:
+                logger.warning("Auto-sync target '%s' is not yet supported.", target)
 
     def _dry_run(
         self,

@@ -72,6 +72,8 @@ class Settings:
     doc_output_mode: str = "apply"  # "apply" | "propose" | "dry-run"
     doc_scope: str | None = None
     doc_scope_exclude: str | None = None
+    doc_auto_sync: bool = False
+    doc_sync_targets: str = ""  # comma-separated: "notion", "notion,gitbook", etc.
 
     # v0.1 compat fields (kept for backward compat, deprecated)
     llm_provider: str = ""  # Deprecated — use llm_model provider/model format
@@ -146,6 +148,8 @@ class Settings:
             doc_output_mode=os.getenv("DOC_OUTPUT_MODE", "apply"),
             doc_scope=os.getenv("DOC_SCOPE") or None,
             doc_scope_exclude=os.getenv("DOC_SCOPE_EXCLUDE") or None,
+            doc_auto_sync=os.getenv("DOC_AUTO_SYNC", "").lower() in ("true", "1", "yes"),
+            doc_sync_targets=os.getenv("DOC_SYNC_TARGETS", ""),
             # v0.1 compat
             llm_provider=old_provider or "",
             google_api_key=os.getenv("GOOGLE_API_KEY", ""),

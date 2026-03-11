@@ -30,6 +30,28 @@ console = Console()
 #   3. Add it as a choice in `cortex sync --target`
 
 
+def _set_env_value(env_path: Path, key: str, value: str) -> None:
+    """Set a key=value in the .cortex/.env file."""
+    key = key.upper()
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+    else:
+        lines = []
+
+    updated = False
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith(f"{key}="):
+            new_lines.append(f"{key}={value}")
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        new_lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(new_lines) + "\n")
+
+
 def _connect_notion(settings: Settings) -> bool:
     """Connect to Notion via OAuth. Returns True if connected."""
     if settings.notion_token_path.exists():
@@ -237,6 +259,12 @@ def init(quick: bool) -> None:
                     console.print("[yellow]No pages created (may already exist)[/yellow]")
             except Exception as e:
                 console.print(f"[yellow]Page bootstrap skipped: {e}[/yellow]")
+
+            # Ask about auto-sync
+            if click.confirm("Auto-sync docs to Notion after every pipeline run?", default=True):
+                _set_env_value(settings.env_path, "DOC_AUTO_SYNC", "true")
+                _set_env_value(settings.env_path, "DOC_SYNC_TARGETS", "notion")
+                console.print("[green]Auto-sync enabled.[/green]")
 
     console.print("\n[bold]Setup complete![/bold]")
     console.print("Run [cyan]cortex status[/cyan] to verify.")
@@ -1134,25 +1162,8 @@ def config(action: str, key: str | None, value: str | None) -> None:
         console.print("[red]Not initialized. Run 'cortex init' first.[/red]")
         return
 
-    env_path = settings.env_path
-    content = env_path.read_text()
-    lines = content.splitlines()
-    key_upper = key.upper()
-
-    updated = False
-    new_lines = []
-    for line in lines:
-        if line.strip().startswith(f"{key_upper}="):
-            new_lines.append(f"{key_upper}={value}")
-            updated = True
-        else:
-            new_lines.append(line)
-
-    if not updated:
-        new_lines.append(f"{key_upper}={value}")
-
-    env_path.write_text("\n".join(new_lines) + "\n")
-    console.print(f"[green]Set {key_upper}={value}[/green]")
+    _set_env_value(settings.env_path, key, value)
+    console.print(f"[green]Set {key.upper()}={value}[/green]")
 
 
 @cli.command()
@@ -1627,6 +1638,104 @@ async def _run_migration(settings: Settings) -> None:
     console.print("[green]Set DOC_OUTPUT=local in .cortex/.env to use local docs.[/green]")
 
 
+async def _run_sync_to_notion(settings: Settings) -> int:
+    """Sync local docs/ to Notion. Returns number of pages synced.
+
+    Extracted so it can be called from both `cortex sync` and auto-sync.
+    """
+    from codebase_cortex.mcp_client import notion_mcp_session
+    from codebase_cortex.notion.bootstrap import (
+        extract_page_id,
+        search_page_by_title,
+    )
+    from codebase_cortex.notion.page_cache import PageCache
+    from codebase_cortex.utils.rate_limiter import NotionRateLimiter
+
+    docs_dir = settings.repo_path / "docs"
+    md_files = [f for f in docs_dir.glob("*.md") if f.name not in ("INDEX.md",)]
+    if not md_files:
+        return 0
+
+    rate_limiter = NotionRateLimiter()
+    cache = PageCache(cache_path=settings.page_cache_path)
+    repo_name = settings.repo_path.name
+
+    async with notion_mcp_session(settings) as session:
+        # Ensure parent page exists
+        parent_id = None
+        cached_parent = cache.find_by_title(repo_name)
+        if cached_parent:
+            parent_id = cached_parent.page_id
+        else:
+            parent_id = await search_page_by_title(session, repo_name)
+            if parent_id:
+                cache.upsert(parent_id, repo_name)
+            else:
+                await rate_limiter.acquire()
+                result = await session.call_tool(
+                    "notion-create-pages",
+                    arguments={
+                        "pages": [{
+                            "properties": {"title": repo_name},
+                            "content": (
+                                f"# {repo_name}\n\n"
+                                f"Documentation hub for **{repo_name}**.\n\n"
+                                "Managed by [Codebase Cortex](https://github.com/sarupurisailalith/codebase-cortex)."
+                            ),
+                        }],
+                    },
+                )
+                parent_id = extract_page_id(result)
+                if parent_id:
+                    cache.upsert(parent_id, repo_name)
+                else:
+                    return 0
+
+        # Sync each doc as a child page
+        synced = 0
+        for md_file in md_files:
+            title = None
+            content = md_file.read_text()
+
+            for line in content.split("\n"):
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+            title = title or md_file.stem.replace("-", " ").title()
+
+            existing = cache.find_by_title(title)
+            try:
+                await rate_limiter.acquire()
+                if existing:
+                    await session.call_tool(
+                        "notion-update-page",
+                        arguments={
+                            "page_id": existing.page_id,
+                            "command": "replace_content",
+                            "new_str": content,
+                        },
+                    )
+                else:
+                    result = await session.call_tool(
+                        "notion-create-pages",
+                        arguments={
+                            "parent": {"page_id": parent_id},
+                            "pages": [{
+                                "properties": {"title": title},
+                                "content": content,
+                            }],
+                        },
+                    )
+                    page_id = extract_page_id(result)
+                    if page_id:
+                        cache.upsert(page_id, title)
+                synced += 1
+            except Exception:
+                continue
+
+        return synced
+
+
 @cli.command()
 @click.option("--target", type=click.Choice(["notion"]), required=True, help="Sync target.")
 def sync(target: str) -> None:
@@ -1649,105 +1758,20 @@ def sync(target: str) -> None:
 
         console.print(f"Syncing {len(md_files)} page(s) to Notion...")
 
-        async def _sync_to_notion():
-            from codebase_cortex.mcp_client import notion_mcp_session
-            from codebase_cortex.notion.bootstrap import (
-                extract_page_id,
-                search_page_by_title,
-            )
-            from codebase_cortex.notion.page_cache import PageCache
-            from codebase_cortex.utils.rate_limiter import NotionRateLimiter
-
-            rate_limiter = NotionRateLimiter()
-            cache = PageCache(cache_path=settings.page_cache_path)
-            repo_name = settings.repo_path.name
-
-            async with notion_mcp_session(settings) as session:
-                # Ensure parent page exists
-                parent_id = None
-                cached_parent = cache.find_by_title(repo_name)
-                if cached_parent:
-                    parent_id = cached_parent.page_id
-                    console.print(f"Using parent page: [bold]{repo_name}[/bold]")
-                else:
-                    parent_id = await search_page_by_title(session, repo_name)
-                    if parent_id:
-                        cache.upsert(parent_id, repo_name)
-                        console.print(f"Found parent page: [bold]{repo_name}[/bold]")
-                    else:
-                        await rate_limiter.acquire()
-                        result = await session.call_tool(
-                            "notion-create-pages",
-                            arguments={
-                                "pages": [{
-                                    "properties": {"title": repo_name},
-                                    "content": (
-                                        f"# {repo_name}\n\n"
-                                        f"Documentation hub for **{repo_name}**.\n\n"
-                                        "Managed by [Codebase Cortex](https://github.com/sarupurisailalith/codebase-cortex)."
-                                    ),
-                                }],
-                            },
-                        )
-                        parent_id = extract_page_id(result)
-                        if parent_id:
-                            cache.upsert(parent_id, repo_name)
-                            console.print(f"Created parent page: [bold]{repo_name}[/bold]")
-                        else:
-                            console.print("[red]Failed to create parent page[/red]")
-                            return 0
-
-                # Sync each doc as a child page
-                synced = 0
-                for md_file in md_files:
-                    title = None
-                    content = md_file.read_text()
-
-                    for line in content.split("\n"):
-                        if line.startswith("# "):
-                            title = line[2:].strip()
-                            break
-                    title = title or md_file.stem.replace("-", " ").title()
-
-                    # Check if page already exists in cache
-                    existing = cache.find_by_title(title)
-                    try:
-                        await rate_limiter.acquire()
-                        if existing:
-                            # Update existing page
-                            await session.call_tool(
-                                "notion-update-page",
-                                arguments={
-                                    "page_id": existing.page_id,
-                                    "command": "replace_content",
-                                    "new_str": content,
-                                },
-                            )
-                            console.print(f"  [green]Updated:[/green] {title}")
-                        else:
-                            # Create new page under parent
-                            result = await session.call_tool(
-                                "notion-create-pages",
-                                arguments={
-                                    "parent": {"page_id": parent_id},
-                                    "pages": [{
-                                        "properties": {"title": title},
-                                        "content": content,
-                                    }],
-                                },
-                            )
-                            page_id = extract_page_id(result)
-                            if page_id:
-                                cache.upsert(page_id, title)
-                            console.print(f"  [green]Created:[/green] {title}")
-                        synced += 1
-                    except Exception as e:
-                        console.print(f"  [red]Failed:[/red] {title} — {e}")
-
-                return synced
-
         try:
-            synced = asyncio.run(_sync_to_notion())
+            synced = asyncio.run(_run_sync_to_notion(settings))
             console.print(f"\n[bold green]Synced {synced} page(s) to Notion.[/bold green]")
+
+            # Offer to enable auto-sync if not already configured
+            if not settings.doc_auto_sync:
+                if click.confirm(
+                    "Enable auto-sync after every pipeline run?", default=False
+                ):
+                    _set_env_value(settings.env_path, "DOC_AUTO_SYNC", "true")
+                    _set_env_value(settings.env_path, "DOC_SYNC_TARGETS", target)
+                    console.print(
+                        "[green]Auto-sync enabled.[/green] "
+                        "Run [cyan]cortex config set DOC_AUTO_SYNC false[/cyan] to disable."
+                    )
         except Exception as e:
             console.print(f"[red]Sync failed: {e}[/red]")
