@@ -17,6 +17,7 @@ ENV_KEYS = [
     "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN",
     "DOC_OUTPUT", "DOC_SYNC", "DOC_DETAIL_LEVEL", "DOC_STRATEGY",
     "DOC_OUTPUT_MODE", "DOC_SCOPE", "DOC_SCOPE_EXCLUDE",
+    "MCP_SERVER_ENABLED", "MCP_AGENT",
 ]
 
 
@@ -190,3 +191,25 @@ def test_settings_doc_defaults(tmp_path: Path):
     assert s.doc_output_mode == "apply"
     assert s.doc_scope is None
     assert s.doc_scope_exclude is None
+
+
+# --- MCP server settings ---
+
+
+def test_mcp_settings_defaults():
+    """MCP settings should default to disabled."""
+    s = Settings()
+    assert s.mcp_server_enabled is False
+    assert s.mcp_agent == ""
+
+
+def test_mcp_settings_from_env(tmp_path):
+    """MCP settings should load from .cortex/.env."""
+    cortex_dir = tmp_path / ".cortex"
+    cortex_dir.mkdir()
+    (cortex_dir / ".env").write_text(
+        "MCP_SERVER_ENABLED=true\nMCP_AGENT=claude-code\n"
+    )
+    s = Settings.from_env(repo_path=tmp_path)
+    assert s.mcp_server_enabled is True
+    assert s.mcp_agent == "claude-code"

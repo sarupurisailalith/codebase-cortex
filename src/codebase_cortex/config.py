@@ -75,6 +75,10 @@ class Settings:
     doc_auto_sync: bool = False
     doc_sync_targets: str = ""  # comma-separated: "notion", "notion,gitbook", etc.
 
+    # MCP server mode
+    mcp_server_enabled: bool = False
+    mcp_agent: str = ""  # "claude-code" | "cursor" | "windsurf" | ""
+
     # v0.1 compat fields (kept for backward compat, deprecated)
     llm_provider: str = ""  # Deprecated — use llm_model provider/model format
     google_api_key: str = ""
@@ -150,6 +154,8 @@ class Settings:
             doc_scope_exclude=os.getenv("DOC_SCOPE_EXCLUDE") or None,
             doc_auto_sync=os.getenv("DOC_AUTO_SYNC", "").lower() in ("true", "1", "yes"),
             doc_sync_targets=os.getenv("DOC_SYNC_TARGETS", ""),
+            mcp_server_enabled=os.getenv("MCP_SERVER_ENABLED", "").lower() in ("true", "1", "yes"),
+            mcp_agent=os.getenv("MCP_AGENT", ""),
             # v0.1 compat
             llm_provider=old_provider or "",
             google_api_key=os.getenv("GOOGLE_API_KEY", ""),
