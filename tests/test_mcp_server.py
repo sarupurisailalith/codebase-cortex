@@ -126,3 +126,16 @@ def test_write_section_creates_file(tmp_path):
     assert created_file.exists()
     content = created_file.read_text()
     assert "Overview" in content or "test" in content
+
+
+def test_all_tools_registered(tmp_path):
+    """All 11 MCP tools should be registered."""
+    server, _, _ = _create_test_server(tmp_path)
+    tool_names = {t.name for t in server._tool_manager.list_tools()}
+    expected = {
+        "cortex_search_related_docs", "cortex_read_section", "cortex_write_section",
+        "cortex_list_docs", "cortex_check_freshness", "cortex_get_doc_status",
+        "cortex_rebuild_index", "cortex_accept_drafts", "cortex_create_page",
+        "cortex_knowledge_map", "cortex_sync",
+    }
+    assert expected.issubset(tool_names), f"Missing: {expected - tool_names}"

@@ -24,13 +24,40 @@ def create_server() -> FastMCP:
     """Create and configure the Cortex MCP server with all tools."""
     mcp = FastMCP("cortex", instructions="Documentation intelligence for your codebase")
 
+    try:
+        settings = Settings.from_env()
+    except Exception:
+        @mcp.tool()
+        def cortex_status() -> dict:
+            """Cortex is not initialized. Run 'cortex init' in your project first."""
+            return {"error": "Cortex is not initialized in this project. Run 'cortex init' to set up."}
+        return mcp
+
     # Load project configuration and indexes at startup
-    settings = Settings.from_env()
     store = FAISSStore(settings.faiss_index_dir)
-    store.load()
+    loaded = store.load()
+    if not loaded:
+        logger.warning("FAISS index not found or empty — semantic search will be unavailable until 'cortex index' is run.")
     docs_dir = settings.repo_path / "docs"
     meta = MetaIndex(docs_dir)
     meta.load()
+
+    # Track FAISS index mtime for auto-reload on change
+    _index_mtime: float = 0.0
+    index_faiss_path = settings.faiss_index_dir / "index.faiss"
+    if index_faiss_path.exists():
+        _index_mtime = index_faiss_path.stat().st_mtime
+
+    def _maybe_reload_index() -> None:
+        """Reload FAISS index if it changed on disk."""
+        nonlocal _index_mtime
+        if not index_faiss_path.exists():
+            return
+        current_mtime = index_faiss_path.stat().st_mtime
+        if current_mtime > _index_mtime:
+            store.load()
+            _index_mtime = current_mtime
+            logger.info("FAISS index reloaded (updated on disk).")
 
     # ── Tool 1: Semantic search ────────────────────────────────────────
     @mcp.tool()
@@ -38,6 +65,7 @@ def create_server() -> FastMCP:
         """Find documentation sections related to a code change or query.
         Uses FAISS semantic search. Pass a natural language query, code snippet, or function name.
         """
+        _maybe_reload_index()
         from codebase_cortex.embeddings.indexer import EmbeddingIndexer
 
         indexer = EmbeddingIndexer(settings.repo_path)
@@ -257,5 +285,159 @@ def create_server() -> FastMCP:
             "backend": settings.doc_output,
             "sync_targets": sync_targets,
         }
+
+    # ── Tool 7: Rebuild FAISS index ──────────────────────────────────────
+    @mcp.tool()
+    def cortex_rebuild_index(incremental: bool = True) -> dict:
+        """Rebuild the FAISS semantic search index.
+        Re-indexes code files to update the semantic search database.
+        Use after significant code changes or if search results seem stale.
+        """
+        import time
+        from codebase_cortex.embeddings.indexer import EmbeddingIndexer
+        from codebase_cortex.utils.file_lock import cortex_lock
+
+        lock_path = settings.cortex_dir / "index.lock"
+        with cortex_lock(lock_path) as acquired:
+            if not acquired:
+                return {"status": "error", "error": "Index is locked by another process."}
+            start = time.time()
+            indexer = EmbeddingIndexer(settings.repo_path)
+            if incremental and store.size > 0:
+                result = indexer.index_codebase_incremental(store)
+                if result.files_added == 0 and result.files_modified == 0 and result.files_removed == 0:
+                    return {"status": "up_to_date", "chunks_indexed": store.size, "files_scanned": 0, "duration_seconds": round(time.time() - start, 2)}
+                store.save()
+                return {"status": "rebuilt", "chunks_indexed": store.size, "files_scanned": result.files_added + result.files_modified, "duration_seconds": round(time.time() - start, 2)}
+            else:
+                chunks = indexer.collect_chunks()
+                if chunks:
+                    embeddings = indexer.embed_chunks(chunks)
+                    store.build(embeddings, chunks)
+                    store.save()
+                return {"status": "rebuilt", "chunks_indexed": len(chunks), "files_scanned": len(set(c.file_path for c in chunks)), "duration_seconds": round(time.time() - start, 2)}
+
+    # ── Tool 8: Accept drafts ──────────────────────────────────────────
+    @mcp.tool()
+    def cortex_accept_drafts(doc_file: str = "", heading: str = "") -> dict:
+        """Accept draft documentation by removing draft banners.
+        Strips '<!-- DRAFT -->' markers from documentation sections.
+        """
+        from codebase_cortex.utils.file_lock import cortex_lock
+
+        lock_path = settings.cortex_dir / "meta.lock"
+        accepted = []
+        with cortex_lock(lock_path) as acquired:
+            if not acquired:
+                return {"error": "Could not acquire lock."}
+            files = [docs_dir / doc_file] if doc_file else sorted(docs_dir.glob("*.md"))
+            for file_path in files:
+                if not file_path.exists() or file_path.name.startswith("."):
+                    continue
+                content = file_path.read_text()
+                if "<!-- DRAFT -->" not in content:
+                    continue
+                new_content = content.replace("<!-- DRAFT -->\n", "").replace("<!-- DRAFT -->", "")
+                if new_content != content:
+                    file_path.write_text(new_content)
+                    accepted.append({"doc_file": file_path.name})
+                    page_data = meta.get_page(file_path.name)
+                    if page_data:
+                        page_data["is_draft"] = False
+            if accepted:
+                meta.save()
+        return {"accepted": accepted, "count": len(accepted)}
+
+    # ── Tool 9: Create page ────────────────────────────────────────────
+    @mcp.tool()
+    def cortex_create_page(title: str, sections: list[str] | None = None, content: str = "") -> dict:
+        """Create a new documentation page with initial structure.
+        Generates a markdown file in docs/ with the given title and optional sections.
+        """
+        import re
+        from codebase_cortex.utils.file_lock import cortex_lock
+
+        slug = re.sub(r"[^\w\s-]", "", title.lower().strip())
+        slug = re.sub(r"[\s_]+", "-", slug).strip("-") or "untitled"
+        doc_file = f"{slug}.md"
+        file_path = docs_dir / doc_file
+        if file_path.exists():
+            return {"error": f"File already exists: {doc_file}"}
+        parts = [f"# {title}"]
+        if content:
+            parts.append(content)
+        if sections:
+            for heading in sections:
+                parts.append(f"## {heading}\n")
+        full_content = "\n\n".join(parts) + "\n"
+        lock_path = settings.cortex_dir / "meta.lock"
+        with cortex_lock(lock_path) as acquired:
+            if not acquired:
+                return {"error": "Could not acquire lock."}
+            docs_dir.mkdir(exist_ok=True)
+            file_path.write_text(full_content)
+            meta.set_page(doc_file, title)
+            meta.save()
+        return {"doc_file": doc_file, "sections": len(sections) if sections else 0}
+
+    # ── Tool 10: Knowledge map ─────────────────────────────────────────
+    @mcp.tool()
+    def cortex_knowledge_map(format: str = "summary") -> dict:
+        """Get the code-to-documentation relationship map.
+        Shows which code files relate to which documentation pages.
+        """
+        _maybe_reload_index()
+        if store.size == 0:
+            return {"error": "No FAISS index. Run cortex_rebuild_index first."}
+
+        code_files = set()
+        doc_files = set()
+        for chunk in store.chunks:
+            if chunk.file_path.startswith("docs/") or chunk.file_path.endswith(".md"):
+                doc_files.add(chunk.file_path)
+            else:
+                code_files.add(chunk.file_path)
+        for md_file in docs_dir.glob("*.md"):
+            if not md_file.name.startswith("."):
+                doc_files.add(f"docs/{md_file.name}")
+
+        from codebase_cortex.embeddings.indexer import EmbeddingIndexer
+        clusters = []
+        mapped_code = set()
+        indexer = EmbeddingIndexer(settings.repo_path)
+        for doc_file in sorted(doc_files):
+            doc_name = doc_file.split("/")[-1].removesuffix(".md").replace("-", " ")
+            query_embedding = indexer.embed_texts([doc_name])
+            if query_embedding.size == 0:
+                continue
+            results = store.search(query_embedding, k=10)
+            related_code = [r.chunk.file_path for r in results if not r.chunk.file_path.startswith("docs/") and r.score > 0.3]
+            mapped_code.update(related_code)
+            cluster = {
+                "theme": doc_name.title(),
+                "doc_files": [doc_file],
+                "code_files": related_code[:5] if format == "summary" else related_code,
+                "coverage": min(1.0, len(related_code) / 5),
+            }
+            clusters.append(cluster)
+        unmapped = sorted(code_files - mapped_code)
+        return {"clusters": clusters, "unmapped_code": unmapped[:20] if format == "summary" else unmapped, "unmapped_docs": []}
+
+    # ── Tool 11: Sync to remote ────────────────────────────────────────
+    @mcp.tool()
+    def cortex_sync(target: str = "notion") -> dict:
+        """Sync local documentation to a configured remote target.
+        Pushes local markdown docs to the specified platform (e.g. Notion).
+        """
+        import asyncio
+        if target == "notion":
+            try:
+                from codebase_cortex.cli import _run_sync_to_notion
+                synced = asyncio.run(_run_sync_to_notion(settings))
+                return {"synced_pages": synced, "target": target, "errors": []}
+            except Exception as e:
+                return {"synced_pages": 0, "target": target, "errors": [str(e)]}
+        else:
+            return {"synced_pages": 0, "target": target, "errors": [f"Unsupported sync target: {target}"]}
 
     return mcp
