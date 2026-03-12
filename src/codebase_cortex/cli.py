@@ -96,6 +96,22 @@ def cli() -> None:
     pass
 
 
+@cli.group()
+def mcp() -> None:
+    """MCP server commands."""
+    pass
+
+
+@mcp.command()
+@click.option("--transport", default="stdio", type=click.Choice(["stdio"]))
+def serve(transport: str) -> None:
+    """Start the Cortex MCP server for coding agents."""
+    from codebase_cortex.mcp_server import create_server
+
+    server = create_server()
+    server.run(transport=transport)
+
+
 @cli.command()
 @click.option("--quick", is_flag=True, help="Fast-path setup: auto-detect LLM, skip wizard.")
 def init(quick: bool) -> None:
