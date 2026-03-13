@@ -1,6 +1,6 @@
 [project]
 name = "codebase-cortex"
-version = "0.2.1"
+version = "0.3.0"
 description = "AI-powered documentation autopilot — commit code, docs update themselves. Local-first multi-agent pipeline analyzes diffs, finds related code via FAISS embeddings, and writes section-level doc updates. Works with any LLM, optional Notion sync."
 readme = "README.md"
 requires-python = ">=3.11"
