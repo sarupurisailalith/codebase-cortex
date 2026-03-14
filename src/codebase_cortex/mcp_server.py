@@ -430,6 +430,15 @@ def create_server() -> FastMCP:
         Pushes local markdown docs to the specified platform (e.g. Notion).
         """
         if target == "notion":
+            # Check for Notion tokens before attempting sync
+            if not settings.notion_token_path.exists():
+                return {
+                    "synced_pages": 0,
+                    "target": target,
+                    "errors": [
+                        "No Notion connection. Run 'cortex sync --target notion' in your terminal to authenticate via browser OAuth."
+                    ],
+                }
             try:
                 from codebase_cortex.cli import _run_sync_to_notion
                 synced = await _run_sync_to_notion(settings)
