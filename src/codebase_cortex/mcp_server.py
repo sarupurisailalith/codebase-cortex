@@ -425,15 +425,14 @@ def create_server() -> FastMCP:
 
     # ── Tool 11: Sync to remote ────────────────────────────────────────
     @mcp.tool()
-    def cortex_sync(target: str = "notion") -> dict:
+    async def cortex_sync(target: str = "notion") -> dict:
         """Sync local documentation to a configured remote target.
         Pushes local markdown docs to the specified platform (e.g. Notion).
         """
-        import asyncio
         if target == "notion":
             try:
                 from codebase_cortex.cli import _run_sync_to_notion
-                synced = asyncio.run(_run_sync_to_notion(settings))
+                synced = await _run_sync_to_notion(settings)
                 return {"synced_pages": synced, "target": target, "errors": []}
             except Exception as e:
                 return {"synced_pages": 0, "target": target, "errors": [str(e)]}
