@@ -15,6 +15,26 @@ from codebase_cortex.config import Settings, CORTEX_DIR_NAME
 
 console = Console()
 
+CLAUDE_MD_CORTEX_SECTION = """
+## Documentation (Codebase Cortex)
+
+This project uses Codebase Cortex for automated documentation management.
+
+### Available Tools
+- `cortex_search_related_docs` — Find docs related to code changes
+- `cortex_read_section` — Read a specific doc section
+- `cortex_write_section` — Update a doc section
+- `cortex_list_docs` — List all doc pages and their structure
+- `cortex_check_freshness` — Find stale documentation
+- `cortex_knowledge_map` — See code-to-doc relationships
+
+### Guidelines
+- After modifying code, search for related docs and update affected sections
+- Use cortex tools for all doc edits — they track metadata and prevent conflicts
+- Check freshness periodically to catch stale docs
+- Human-edited sections are protected — the tool will warn before overwriting
+"""
+
 
 # ---------------------------------------------------------------------------
 # Service connection helpers — standard pattern for OAuth-based integrations
@@ -50,6 +70,72 @@ def _set_env_value(env_path: Path, key: str, value: str) -> None:
         new_lines.append(f"{key}={value}")
 
     env_path.write_text("\n".join(new_lines) + "\n")
+
+
+def _setup_mcp_agent(repo_path: Path, env_path: Path) -> None:
+    """Configure MCP server for a coding agent."""
+    import json
+
+    agents = {
+        "1": ("claude-code", ".mcp.json", None),
+        "2": ("cursor", ".cursor/mcp.json", ".cursor"),
+        "3": ("windsurf", ".windsurf/mcp.json", ".windsurf"),
+    }
+
+    console.print("\n[bold]Which coding agent do you use?[/bold]")
+    console.print("  1. Claude Code")
+    console.print("  2. Cursor")
+    console.print("  3. Windsurf")
+    console.print("  4. Other (print config)")
+    choice = click.prompt("  Select", default="1")
+
+    mcp_config = {
+        "mcpServers": {
+            "cortex": {
+                "command": "cortex",
+                "args": ["mcp", "serve"],
+            }
+        }
+    }
+
+    if choice in agents:
+        agent_name, config_path, parent_dir = agents[choice]
+        full_path = repo_path / config_path
+
+        if parent_dir:
+            (repo_path / parent_dir).mkdir(exist_ok=True)
+
+        # Merge with existing config if present
+        if full_path.exists():
+            existing = json.loads(full_path.read_text())
+            existing.setdefault("mcpServers", {}).update(mcp_config["mcpServers"])
+            full_path.write_text(json.dumps(existing, indent=2) + "\n")
+        else:
+            full_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+
+        console.print(f"  [green]✓[/green] Updated {config_path}")
+
+        _set_env_value(env_path, "MCP_SERVER_ENABLED", "true")
+        _set_env_value(env_path, "MCP_AGENT", agent_name)
+
+        # CLAUDE.md integration (only for Claude Code)
+        if agent_name == "claude-code":
+            if click.confirm("  Add documentation guidelines to CLAUDE.md?", default=True):
+                claude_md = repo_path / "CLAUDE.md"
+                if claude_md.exists():
+                    existing = claude_md.read_text()
+                    if "Codebase Cortex" not in existing:
+                        claude_md.write_text(existing.rstrip() + "\n" + CLAUDE_MD_CORTEX_SECTION)
+                        console.print("  [green]✓[/green] Appended to CLAUDE.md")
+                    else:
+                        console.print("  [green]✓[/green] CLAUDE.md already has Cortex section")
+                else:
+                    claude_md.write_text(CLAUDE_MD_CORTEX_SECTION.lstrip())
+                    console.print("  [green]✓[/green] Created CLAUDE.md")
+    else:
+        console.print("\n[bold]Add this to your agent's MCP config:[/bold]")
+        console.print(json.dumps(mcp_config, indent=2))
+        _set_env_value(env_path, "MCP_SERVER_ENABLED", "true")
 
 
 def _connect_notion(settings: Settings) -> bool:
@@ -96,6 +182,22 @@ def cli() -> None:
     pass
 
 
+@cli.group()
+def mcp() -> None:
+    """MCP server commands."""
+    pass
+
+
+@mcp.command()
+@click.option("--transport", default="stdio", type=click.Choice(["stdio"]))
+def serve(transport: str) -> None:
+    """Start the Cortex MCP server for coding agents."""
+    from codebase_cortex.mcp_server import create_server
+
+    server = create_server()
+    server.run(transport=transport)
+
+
 @cli.command()
 @click.option("--quick", is_flag=True, help="Fast-path setup: auto-detect LLM, skip wizard.")
 def init(quick: bool) -> None:
@@ -113,6 +215,49 @@ def init(quick: bool) -> None:
     if cortex_dir.exists():
         if not click.confirm(f"{CORTEX_DIR_NAME}/ already exists. Re-initialize?", default=False):
             return
+
+    # Create .cortex/ directory and scaffold files early so mode selection can write to .env
+    cortex_dir.mkdir(exist_ok=True)
+    env_path = cortex_dir / ".env"
+    if not env_path.exists():
+        env_path.write_text("")
+
+    # Write .cortex/.gitignore (ignore everything inside)
+    (cortex_dir / ".gitignore").write_text("*\n")
+
+    # Create default .cortexignore
+    _init_cortexignore(cortex_dir)
+
+    # Create docs/ directory with initial files
+    _init_docs_directory(cwd)
+
+    # Add .cortex/ to repo's .gitignore if not already there
+    repo_gitignore = cwd / ".gitignore"
+    if repo_gitignore.exists():
+        content = repo_gitignore.read_text()
+        if CORTEX_DIR_NAME not in content:
+            with open(repo_gitignore, "a") as f:
+                f.write(f"\n# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
+    else:
+        repo_gitignore.write_text(f"# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
+
+    console.print(f"[green]Created {cortex_dir}/ with config[/green]")
+
+    # Mode selection
+    console.print()
+    use_mcp = click.confirm("Use as a coding agent tool? (MCP server — no API key needed)", default=True)
+    use_standalone = click.confirm("Use as git hook / CLI / CI? (needs LLM API key)", default=True)
+
+    if use_mcp:
+        _setup_mcp_agent(cwd, env_path)
+
+    if not use_standalone:
+        # MCP-only mode — skip LLM configuration
+        console.print("\n[green]✓[/green] Cortex initialized (MCP server mode)")
+        console.print("  [dim]Tip: Add an LLM later with 'cortex config set LLM_MODEL ...' for git hooks and CI/CD.[/dim]")
+        return
+
+    # Continue with LLM setup flow...
 
     # Step 1: LLM model (LiteLLM provider/model format)
     from codebase_cortex.config import RECOMMENDED_MODELS
@@ -181,54 +326,23 @@ def init(quick: bool) -> None:
         except (subprocess.CalledProcessError, FileNotFoundError):
             github_token = click.prompt("GitHub Personal Access Token", hide_input=True)
 
-    # Step 4: Create .cortex/ directory and docs/
-    cortex_dir.mkdir(exist_ok=True)
-
-    # Write .cortex/.env — LiteLLM format
+    # Write LLM config to .cortex/.env
     # LiteLLM reads provider-specific env vars automatically (GOOGLE_API_KEY, etc.)
     # We also store as LLM_API_KEY for explicit passthrough
     provider = llm_model.split("/")[0] if "/" in llm_model else ""
     provider_key_map = {"gemini": "GEMINI_API_KEY", "google": "GOOGLE_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
     provider_key_name = provider_key_map.get(provider, "")
 
-    env_lines = [
-        f"LLM_MODEL={llm_model}",
-        f"LLM_API_KEY={api_key}",
-    ]
+    _set_env_value(env_path, "LLM_MODEL", llm_model)
+    _set_env_value(env_path, "LLM_API_KEY", api_key)
     if provider_key_name:
-        env_lines.append(f"{provider_key_name}={api_key}")
-    env_lines.extend([
-        f"DOC_OUTPUT={doc_output}",
-        f"DOC_DETAIL_LEVEL={detail_level}",
-        f"DOC_STRATEGY={branch_strategy}",
-        "DOC_OUTPUT_MODE=apply",
-    ])
+        _set_env_value(env_path, provider_key_name, api_key)
+    _set_env_value(env_path, "DOC_OUTPUT", doc_output)
+    _set_env_value(env_path, "DOC_DETAIL_LEVEL", detail_level)
+    _set_env_value(env_path, "DOC_STRATEGY", branch_strategy)
+    _set_env_value(env_path, "DOC_OUTPUT_MODE", "apply")
     if github_token:
-        env_lines.append(f"GITHUB_TOKEN={github_token}")
-
-    env_path = cortex_dir / ".env"
-    env_path.write_text("\n".join(env_lines) + "\n")
-
-    # Write .cortex/.gitignore (ignore everything inside)
-    (cortex_dir / ".gitignore").write_text("*\n")
-
-    # Create default .cortexignore
-    _init_cortexignore(cortex_dir)
-
-    # Create docs/ directory with initial files
-    _init_docs_directory(cwd)
-
-    # Add .cortex/ to repo's .gitignore if not already there
-    repo_gitignore = cwd / ".gitignore"
-    if repo_gitignore.exists():
-        content = repo_gitignore.read_text()
-        if CORTEX_DIR_NAME not in content:
-            with open(repo_gitignore, "a") as f:
-                f.write(f"\n# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
-    else:
-        repo_gitignore.write_text(f"# Codebase Cortex\n{CORTEX_DIR_NAME}/\n")
-
-    console.print(f"[green]Created {cortex_dir}/ with config[/green]")
+        _set_env_value(env_path, "GITHUB_TOKEN", github_token)
 
     # Step 5: Git hook
     git_dir = cwd / ".git"

@@ -9,6 +9,8 @@
 
 Codebase Cortex is a local-first, multi-agent documentation engine that watches your codebase for changes and updates markdown documentation automatically. It uses LangGraph to orchestrate nine pipeline nodes that analyze code, route updates to specific sections, write docs, validate accuracy, generate indexes, create tasks, and produce sprint reports. Docs live as plain markdown files in your repo — no cloud dependency required. Optional sync to Notion is available via the DocBackend protocol.
 
+**New in v0.3:** MCP server mode — coding agents (Claude Code, Cursor, Windsurf) can use Cortex's documentation tools directly. No LLM API key needed. [Learn more →](docs/mcp-server.md)
+
 ```mermaid
 graph LR
     A[Git Commit] --> B[CodeAnalyzer]
@@ -26,6 +28,7 @@ graph LR
 
 ## Features
 
+- **MCP server mode** — Coding agents (Claude Code, Cursor, Windsurf) get 11 documentation tools via MCP. No LLM API key needed — the agent's own LLM does the thinking
 - **Local-first documentation** — Docs are plain markdown in your repo's `docs/` directory. No cloud dependency required
 - **Section-level updates** — Only changed sections are rewritten, preserving human edits
 - **Human-edit preservation** — MetaIndex tracks section hashes and detects manual edits, which the pipeline protects
@@ -45,7 +48,7 @@ graph LR
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
-- An LLM — cloud API key (Gemini, Anthropic, OpenRouter, OpenAI) or a local model (Ollama, vLLM, LM Studio)
+- An LLM — cloud API key (Gemini, Anthropic, OpenRouter, OpenAI) or a local model (Ollama, vLLM, LM Studio). **Not required for MCP server mode** — coding agents use their own LLM
 
 ### Install
 
@@ -111,6 +114,7 @@ The `init` wizard will:
 | `cortex sync --target notion` | Sync local docs to Notion (OAuth flow) |
 | `cortex ci [--on-pr] [--on-merge]` | CI/CD mode (JSON output for pipelines) |
 | `cortex map` | Generate knowledge map from FAISS clusters |
+| `cortex mcp serve` | Start MCP server for coding agents (stdio) |
 
 ## How It Works
 
@@ -212,9 +216,18 @@ LLM_API_BASE=http://localhost:8000
 | [Notion Integration](docs/notion-integration.md) | OAuth flow, sync protocol, page management |
 | [Embeddings & Search](docs/embeddings.md) | FAISS index, TreeSitter chunking, semantic search |
 | [CI/CD Integration](docs/ci-cd.md) | GitHub Actions, GitLab CI, branch strategies |
+| [MCP Server](docs/mcp-server.md) | MCP server mode for coding agents (Claude Code, Cursor, Windsurf) |
 | [Contributing](docs/contributing.md) | Development setup, testing, project structure |
 
 ## Changelog
+
+### 0.3.0
+- **MCP server mode** — Coding agents (Claude Code, Cursor, Windsurf) get 11 documentation tools via MCP. No LLM API key needed — the agent's own LLM does the thinking
+- **MCP tools** — `cortex_search_related_docs`, `cortex_read_section`, `cortex_write_section`, `cortex_list_docs`, `cortex_check_freshness`, `cortex_get_doc_status`, `cortex_rebuild_index`, `cortex_accept_drafts`, `cortex_create_page`, `cortex_knowledge_map`, `cortex_sync`
+- **Human-edit protection** — `cortex_write_section` checks MetaIndex for human edits, requires `[force]` suffix to overwrite
+- **File locking** — Concurrent access safety between MCP server and standalone pipeline via `fcntl.flock`
+- **FAISS staleness detection** — MCP server auto-reloads index when standalone pipeline rebuilds it
+- **Init flow** — `cortex init` now offers MCP-only, standalone, or hybrid mode selection
 
 ### 0.2.0
 - **Redesign**: Local-first multi-backend documentation engine — docs live as markdown in `docs/`, no cloud dependency required

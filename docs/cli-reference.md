@@ -39,6 +39,7 @@
   - [JSON output](#json-output)
   - [GitHub Actions example](#github-actions-example)
   - [GitLab CI example](#gitlab-ci-example)
+- [`cortex mcp serve`](#cortex-mcp-serve)
 - [`cortex scan`](#cortex-scan)
   - [Options](#options-3)
   - [Examples](#examples-3)
@@ -72,9 +73,21 @@ cortex init --quick   # Auto-detect from env, use defaults
 
 ### What it does
 
+The init wizard first asks you to choose a mode:
+
+- **MCP server only** — Sets up Cortex as an MCP server for coding agents. No LLM API key needed. Configures `.mcp.json` for your agent (Claude Code, Cursor, or Windsurf) and optionally appends Cortex tool descriptions to your project's `CLAUDE.md`.
+- **Standalone pipeline** — Full LLM-powered pipeline that analyzes code and writes docs automatically.
+- **Hybrid** — Both MCP server and standalone pipeline.
+
+For standalone and hybrid modes, the wizard continues with:
+
 ```mermaid
 graph TD
-    A[Start] --> B[Choose LLM model]
+    A[Start] --> M{Choose mode}
+    M -- MCP only --> N[Configure agent]
+    N --> O[Generate .mcp.json]
+    O --> P[Done]
+    M -- Standalone/Hybrid --> B[Choose LLM model]
     B --> C[Enter API key]
     C --> D[Select doc output backend]
     D --> E[Choose detail level]
@@ -574,6 +587,51 @@ cortex-docs:
 
 ---
 
+## `cortex mcp serve`
+
+Start the MCP (Model Context Protocol) server. This exposes 11 deterministic documentation tools over stdio for coding agents like Claude Code, Cursor, and Windsurf.
+
+```bash
+cortex mcp serve
+```
+
+The server requires a `.cortex/` directory (created by `cortex init`). No LLM API key is needed — the coding agent's own LLM does the thinking.
+
+**Tools exposed:**
+
+| Tool | Description |
+|------|-------------|
+| `cortex_search_related_docs` | Search FAISS index for code related to a query |
+| `cortex_read_section` | Read a specific section from a doc page |
+| `cortex_write_section` | Write/update a section (respects human edits) |
+| `cortex_list_docs` | List all documentation pages with metadata |
+| `cortex_check_freshness` | Check if docs are stale vs source code |
+| `cortex_get_doc_status` | Get detailed status for a specific doc page |
+| `cortex_rebuild_index` | Rebuild the FAISS embedding index |
+| `cortex_accept_drafts` | Remove draft banners from reviewed docs |
+| `cortex_create_page` | Create a new documentation page |
+| `cortex_knowledge_map` | Generate knowledge map from FAISS clusters |
+| `cortex_sync` | Sync local docs to Notion (requires prior OAuth) |
+
+**Agent configuration:**
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "command": "cortex",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+See [MCP Server documentation](mcp-server.md) for full setup instructions and agent-specific configs.
+
+---
+
 ## `cortex scan`
 
 Discover and link Notion pages to Cortex.
@@ -643,6 +701,8 @@ All configuration is stored in `.cortex/.env`:
 | `DOC_STRATEGY` | `main-only` or `branch-aware` |
 | `DOC_OUTPUT_MODE` | `apply`, `propose`, or `dry-run` |
 | `DOC_SCOPE` | Optional monorepo scope path |
+| `MCP_SERVER_ENABLED` | Enable MCP server mode (`true`/`false`) |
+| `MCP_AGENT` | Configured coding agent (`claude-code`, `cursor`, `windsurf`) |
 | `GITHUB_TOKEN` | GitHub personal access token (optional) |
 
 See [Configuration](configuration.md) for details.
