@@ -1,7 +1,7 @@
 # Codebase Cortex - Claude Code Instructions
 
 ## Project Overview
-LangGraph multi-agent system that syncs engineering docs with code via Notion MCP. v0.2 is a local-first, multi-backend documentation engine with incremental indexing and CI/CD support.
+LangGraph multi-agent system that syncs engineering docs with code. v0.3 adds MCP server mode — coding agents (Claude Code, Cursor, Windsurf) get 11 deterministic documentation tools, no LLM API key needed. Also a local-first, multi-backend documentation engine with incremental indexing and CI/CD support.
 
 ## Tech Stack
 - Python 3.14, uv package manager
@@ -20,13 +20,14 @@ LangGraph multi-agent system that syncs engineering docs with code via Notion MC
 - `src/codebase_cortex/embeddings/` - FAISS index, tree-sitter chunker, HDBSCAN clustering
 - `src/codebase_cortex/git/` - Git diff parsing, GitHub client
 - `src/codebase_cortex/notion/` - Notion page bootstrap and caching
-- `src/codebase_cortex/utils/` - Section parser, rate limiter, JSON parsing
+- `src/codebase_cortex/mcp_server.py` - MCP server (11 tools, FastMCP, no LLM needed)
+- `src/codebase_cortex/utils/` - Section parser, rate limiter, JSON parsing, file locking
 - `tests/` - pytest tests
 - `ref/` - Architecture docs and plans (local only)
 
 ## Commands
 - `uv sync` - Install dependencies
-- `uv run cortex --help` - CLI help (17 commands)
+- `uv run cortex --help` - CLI help (18 commands, including `cortex mcp serve`)
 - `uv run pytest` - Run tests
 - `uv run pytest tests/test_config.py -v` - Run specific test
 
